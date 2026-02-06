@@ -1,0 +1,68 @@
+{
+    "jk_chip": [
+        "nRF52840_xxAA",
+        "STM32L412CB",
+        "stm32f103C8",
+        "stm32f103zet6",
+        "nRF52832_xxAA",
+        "nRF52832_xxAB"
+    ],
+    "jk_interface": [
+        "SWD"
+    ],
+    "jk_con_reset": true,
+    "jk_speed": 4000,
+    "hw_sel": "2",
+    "filter": "",
+    "filter_en": false,
+    "font": [
+        "Consolas",
+        "Calibri"
+    ],
+    "font_size": "12",
+    "tx_line": "\n",
+    "user_input_data": [
+        "1235658558asdfsd\nad\n12335\n\n\n12",
+        "1235658558asdfsd\nad\n12335",
+        "12356",
+        "1235658558",
+        "1235658558asdfsd",
+        "123",
+        "1235658558asdfsd\nad\n1233"
+    ],
+    "curves_name": "X&&Y&&Z",
+    "y_range": [
+        -100,
+        100
+    ],
+    "y_label_text": "m/s^2",
+    "ser_baud": [
+        2000000,
+        115200,
+        941176,
+        1152000,
+        9600,
+        19200
+    ],
+    "ser_com": "COM4",
+    "ser_des": "USB Serial Port (COM4)",
+    "char_format": "asc",
+    "update_flag": true,
+    "line_break": "",
+    "rtt_block_address": [
+        "",
+        ""
+    ],
+    "search_history": [
+        "BDS",
+        "APPALGBDS",
+        "APPDTBDS(",
+        "APPDTBDS(0)APPALGBDS(0)Z=BDS",
+        "APPDTBDS",
+        ".bss",
+        "vPort",
+        "task",
+        "app_",
+        "cwm_algo_task"
+    ]
+}
