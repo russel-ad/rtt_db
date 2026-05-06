@@ -8,7 +8,7 @@ import datetime
 import os
 import bds.bds_jlink as bds_jk
 import multiprocessing
-import bds.bds_serial as bds_ser
+import my_serial as bds_ser
 import bds.bds_waveform as wv
 import requests
 import webbrowser
@@ -122,7 +122,6 @@ def update_user_input_list(input_data, user_input_list):
         user_input_list = user_input_list[:30]
 
     return user_input_list
-
 
 # PyQt5 主窗口类
 class MainWindow(QMainWindow):
@@ -285,14 +284,51 @@ class MainWindow(QMainWindow):
         if not self.hw_obj:
             return
 
+        # 1. 从硬件读取原始数据
         raw_log = []
         self.hw_obj.read_data_queue(raw_log)
-
-        if self.js_cfg.get('char_format', 'utf-8') == 'hex':
-            if raw_log:
-                self.log_text.append(''.join(raw_log))
+        if not raw_log:
             return
 
+        # 2. HEX 模式直接输出
+        if self.js_cfg.get('char_format', 'utf-8') == 'hex':
+            for hex_line in raw_log:
+                self.log_text.append(hex_line)
+            return
+
+        # 3. 合并本次数据，并与未完成的行拼接
+        combined = self.log_remain_str + ''.join(raw_log)
+        self.log_remain_str = ''  # 先清空，后续若有不完整行再重新赋值
+
+        # 4. 清理可能的 b'...' 转义
+        import re
+        combined = re.sub(r"b'([^']*)'", lambda m: m.group(1), combined)
+        combined = re.sub(r'b"([^"]*)"', lambda m: m.group(1), combined)
+        combined = combined.replace('\\n', ' ').replace('\\r', ' ').replace('\\t', ' ')
+
+        # 5. 分割行（保留空行，因为空行可能是有意义的）
+        lines = combined.splitlines(keepends=False)
+
+        # 6. 处理最后一行是否完整
+        if not combined.endswith('\n'):
+            # 最后一行不完整，保存到缓存
+            if lines:
+                self.log_remain_str = lines[-1]
+                lines = lines[:-1]
+            else:
+                # 全部不完整（可能数据量小），直接作为一行输出（避免永久缓存）
+                if len(combined) > 0:
+                    # 强制输出这一条不完整行，并清空缓存
+                    lines = [combined]
+                    self.log_remain_str = ''
+                else:
+                    return
+
+        # 7. 如果没有完整行且没有强制输出，返回
+        if not lines:
+            return
+
+        # 8. 过滤器
         filter_pat = []
         only_exclude = True
         if self.filter_enable.isChecked():
@@ -300,17 +336,33 @@ class MainWindow(QMainWindow):
             if self.filter_inverse.isChecked():
                 only_exclude = False
 
-        new_log, self.log_remain_str = log_fileter(raw_log, filter_pat,
-                                                   self.log_remain_str, only_exclude)
+        # 9. 逐行处理并显示
+        last_time = None
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            if filter_pat and (any(p in line for p in filter_pat) == only_exclude):
+                continue
 
-        if self.js_cfg.get('char_format', 'utf-8') != 'asc' or not db_data_check_error(new_log):
-            # 处理颜色标记
-            self.append_log_with_color(new_log)
-            self.save_log_to_file(new_log)
-        else:
-            error_msg = "RTT数据出错，可能需要重启设备！"
-            self.log_text.append(error_msg)
-            log.info(error_msg)
+            # 精确到微秒的时间戳
+            now = datetime.datetime.now()
+            time_str = now.strftime("%H:%M:%S.%f")
+            # 避免同一批次内微秒重复
+            if time_str == last_time:
+                base, frac = time_str.split('.')
+                micro = int(frac.ljust(6, '0')[:6]) + 1
+                if micro >= 1000000:
+                    micro = 0
+                time_str = f"{base}.{micro:06d}"
+            last_time = time_str
+
+            display_line = f"[{time_str}] [REV] {line}"
+            self.log_text.append(display_line)
+
+            # 实时保存
+            if self.save_realtime_btn.text() == '关闭实时保存数据':
+                self.save_log_to_file(display_line + '\n')
 
     def append_log_with_color(self, log_text):
         # 简单的颜色处理（可根据需要完善）
@@ -331,12 +383,194 @@ class MainWindow(QMainWindow):
         return os.path.join(log_dir, f'real_time_log_{datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")}.txt')
 
     def on_connect(self):
-        # 连接硬件逻辑
-        pass
+        """
+        支持 J-Link/串口 连接/断开，自动切换硬件对象
+        """
+        print(f"hw_sel = {self.js_cfg.get('hw_sel', '1')}")
+        print(f"hw_obj type = {type(self.hw_obj)}")
+        try:
+            # 波形复位
+            try:
+                wv.wave_cmd('wave reset')
+            except:
+                pass
+
+            # ===== 根据配置决定使用哪种硬件对象 =====
+            desired_hw = self.js_cfg.get('hw_sel', '1')  # '1'=J-Link, '2'=串口
+
+            # 如果当前的硬件对象类型与期望的不符，则切换
+            if desired_hw == '1':  # 期望 J-Link
+                if not isinstance(self.hw_obj, bds_jk.BDS_Jlink):
+                    if self.hw_obj and self.hw_obj.hw_is_open():
+                        self.hw_obj.hw_close()
+                    self.hw_obj = bds_jk.BDS_Jlink(
+                        hw_error, hw_warn,
+                        char_format=self.js_cfg.get('char_format', 'utf-8')
+                    )
+                    self.timestamp_btn.setText("打开时间戳")
+                    self.timestamp_btn.setStyleSheet("")
+            else:  # 期望串口
+                if not isinstance(self.hw_obj, bds_ser.BDS_Serial):
+                    if self.hw_obj and self.hw_obj.hw_is_open():
+                        self.hw_obj.hw_close()
+                    self.hw_obj = bds_ser.BDS_Serial(
+                        hw_error, hw_warn,
+                        char_format=self.js_cfg.get('char_format', 'utf-8')
+                    )
+                    self.timestamp_btn.setText("打开时间戳")
+                    self.timestamp_btn.setStyleSheet("")
+
+            # ===== 连接/断开操作 =====
+            # J-Link 分支
+            if desired_hw == '1':
+                # 已连接则断开
+                if self.hw_obj and self.hw_obj.hw_is_open():
+                    self.hw_obj.hw_close()
+                    self.connect_btn.setText("J_Link连接")
+                    self.connect_btn.setStyleSheet("")
+                    self.timestamp_btn.setText("打开时间戳")
+                    self.timestamp_btn.setStyleSheet("")
+                    self.status_bar.showMessage("J_Link已断开")
+                    log.info("J_Link断开连接")
+                    time.sleep(0.1)
+                    return
+
+                # 新连接
+                jk_con_reset = self.js_cfg.get('jk_con_reset', False)
+                jk_speed = int(self.js_cfg.get('jk_speed', 4000))
+                chip = self.js_cfg['jk_chip'][0]
+                start_address = None
+                range_size = 0
+                rtt_cfg = self.js_cfg.get('rtt_block_address', ['', ''])
+                if len(rtt_cfg) >= 2 and rtt_cfg[0] and rtt_cfg[1]:
+                    start_address = int(rtt_cfg[0], 16)
+                    range_size = int(rtt_cfg[1], 16)
+
+                result = self.hw_obj.hw_open(
+                    speed=jk_speed,
+                    chip=chip,
+                    reset_flag=jk_con_reset,
+                    start_address=start_address,
+                    range_size=range_size
+                )
+                if result:
+                    self.connect_btn.setText("J_Link断开")
+                    self.connect_btn.setStyleSheet("background-color: green; color: white;")
+                    self.status_bar.showMessage("J_Link连接成功")
+                    self.log_text.append(f"[J_Link LOG] sn:{self.hw_obj.get_hw_serial_number()}")
+                    self.log_text.append(f"[J_Link LOG] 芯片型号:{chip}")
+                    if jk_con_reset:
+                        self.log_text.append("[J_Link LOG] J_Link复位MCU")
+                    else:
+                        self.log_text.append("[J_Link LOG] J_Link未复位MCU")
+                else:
+                    QMessageBox.warning(self, "错误", "J_Link连接失败")
+
+            # ===== 串口分支 =====
+            else:
+                # 若已连接，则断开
+                if self.hw_obj and self.hw_obj.hw_is_open():
+                    self.hw_obj.hw_close()
+                    self.connect_btn.setText("串口连接")
+                    self.connect_btn.setStyleSheet("")
+                    self.timestamp_btn.setText("打开时间戳")
+                    self.timestamp_btn.setStyleSheet("")
+                    self.status_bar.showMessage("串口已断开")
+                    log.info("串口断开连接")
+                    time.sleep(0.1)
+                    return
+
+                # 新连接
+                ser_port = self.js_cfg.get('ser_port', '').strip()
+                if not ser_port:
+                    QMessageBox.warning(self, "错误", "未配置串口端口，请先在配置中选择串口！")
+                    return
+
+                baud = int(self.js_cfg.get('ser_baud', [115200])[0])
+
+                # 调用封装的串口打开
+                result = self.hw_obj.hw_open(ser_port, baud)
+                if result:
+                    self.connect_btn.setText("串口断开")
+                    self.connect_btn.setStyleSheet("background-color: green; color: white;")
+                    self.status_bar.showMessage("串口连接成功")
+                    self.log_text.append(f"[Serial LOG] 串口:{ser_port}")
+                    self.log_text.append(f"[Serial LOG] 波特率:{baud}")
+                else:
+                    QMessageBox.warning(self, "错误", f"串口连接失败\n端口: {ser_port}\n波特率: {baud}")
+
+        except Exception as e:
+            try:
+                if self.hw_obj:
+                    self.hw_obj.hw_close()
+            except:
+                pass
+            QMessageBox.critical(self, "连接异常", str(e))
 
     def on_timestamp(self):
-        # 时间戳逻辑
-        pass
+        """
+        RTT/串口日志时间戳开关
+        对应原PySimpleGUI逻辑：
+            打开时间戳 -> hw_obj.open_timestamp()
+            关闭时间戳 -> hw_obj.close_timestamp()
+        """
+
+        try:
+            # 硬件未连接
+            if not self.hw_obj or not self.hw_obj.hw_is_open():
+                QMessageBox.warning(self, "警告", "请先连接硬件！")
+                return
+
+            # 当前按钮状态判断
+            if self.timestamp_btn.text() == "打开时间戳":
+
+                # 打开底层时间戳
+                if hasattr(self.hw_obj, "open_timestamp"):
+                    self.hw_obj.open_timestamp()
+                else:
+                    QMessageBox.warning(self, "错误", "当前硬件对象不支持时间戳功能")
+                    return
+
+                # 更新UI
+                self.timestamp_btn.setText("关闭时间戳")
+                self.timestamp_btn.setStyleSheet(
+                    "background-color: green; color: white;"
+                )
+
+                self.js_cfg['timestamp_en'] = True
+                self.status_bar.showMessage("时间戳已开启")
+
+            else:
+
+                # 关闭底层时间戳
+                if hasattr(self.hw_obj, "close_timestamp"):
+                    self.hw_obj.close_timestamp()
+                else:
+                    QMessageBox.warning(self, "错误", "当前硬件对象不支持时间戳功能")
+                    return
+
+                # 更新UI
+                self.timestamp_btn.setText("打开时间戳")
+                self.timestamp_btn.setStyleSheet("")
+
+                self.js_cfg['timestamp_en'] = False
+                self.status_bar.showMessage("时间戳已关闭")
+
+            # 保存配置
+            with open('config.json', 'w', encoding='utf-8') as f:
+                json.dump(
+                    self.js_cfg,
+                    f,
+                    indent=4,
+                    ensure_ascii=False
+                )
+
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "时间戳异常",
+                f"时间戳切换失败:\n{str(e)}"
+            )
 
     def on_save_realtime(self):
         if self.save_realtime_btn.text() == '实时保存数据':
@@ -410,24 +644,41 @@ class MainWindow(QMainWindow):
         user_input_data = self.js_cfg.get('user_input_data', [])
         user_input_data = update_user_input_list(input_data, user_input_data)
         self.js_cfg['user_input_data'] = user_input_data
-
-        # 更新下拉框
         self.history_combo.clear()
         self.history_combo.addItems(user_input_data)
 
         # 发送数据
         try:
+            send_display = ""  # 用于在日志中显示的字符串
             if self.data_type_combo.currentText() == 'HEX':
                 # HEX格式发送
-                hex_data = [int(i, 16) for i in input_data.split(' ') if i]
-                self.hw_obj.hw_write(hex_data)
+                hex_list = [int(i, 16) for i in input_data.split() if i]
+                send_bytes = bytes(hex_list)
+                self.hw_obj.hw_write(hex_list)  # 原接口接受列表
+                send_display = ' '.join(f'{b:02X}' for b in send_bytes)
             else:
                 # ASC格式发送
                 line_break = self.js_cfg.get('line_break', '')
                 data_to_send = input_data + line_break
-                self.hw_obj.hw_write([ord(i) for i in data_to_send])
+                # 根据当前字符编码转换为字节
+                encoding = self.js_cfg.get('char_format', 'utf-8')
+                if encoding == 'asc':
+                    encoding = 'ascii'
+                send_bytes = data_to_send.encode(encoding, errors='replace')
+                self.hw_obj.hw_write(list(send_bytes))
+                # 显示时去掉换行符，避免日志换行混乱
+                send_display = input_data  # 不显示附加的换行
 
+            # 在日志区域显示发送的数据
+            now = datetime.datetime.now()
+            timestamp = f"{now.strftime('%H:%M:%S')}.{int(now.microsecond / 1000):03d}"
+            self.log_text.append(f"[{timestamp}] [SEND] {send_display}")
             self.status_bar.showMessage("数据发送成功")
+
+            # 自动滚动到底部（可选）
+            self.log_text.verticalScrollBar().setValue(
+                self.log_text.verticalScrollBar().maximum()
+            )
         except Exception as e:
             QMessageBox.warning(self, "错误", f"发送失败: {str(e)}")
 
@@ -469,7 +720,6 @@ class MainWindow(QMainWindow):
 
 
 # 配置对话框
-# 配置对话框 - 修复版本
 class ConfigDialog(QDialog):
     def __init__(self, js_cfg, parent=None):
         super().__init__(parent)
@@ -479,7 +729,7 @@ class ConfigDialog(QDialog):
     def init_ui(self):
         self.setWindowTitle("硬件接口配置")
         self.setModal(True)
-        self.setMinimumSize(600, 500)  # 设置最小大小而不是固定大小
+        self.setMinimumSize(600, 500)
 
         # 创建滚动区域
         scroll_area = QScrollArea()
@@ -520,7 +770,7 @@ class ConfigDialog(QDialog):
 
         # 速度
         self.jk_speed = QLineEdit(str(self.js_cfg.get('jk_speed', 4000)))
-        self.jk_speed.setValidator(QIntValidator(100, 20000))  # 限制输入范围
+        self.jk_speed.setValidator(QIntValidator(100, 20000))
 
         # SN号（可选）
         self.jk_sn_label = QLabel("SN:")
@@ -546,17 +796,26 @@ class ConfigDialog(QDialog):
         jk_layout.addRow("RTT地址搜索范围:", self.rtt_address)
         self.jk_group.setLayout(jk_layout)
 
-        # 串口配置
+        # ========== 串口配置（修复版本）==========
         self.ser_group = QGroupBox("串口配置")
         ser_layout = QFormLayout()
 
-        # 串口列表
+        # 获取串口列表（描述列表和名称列表）
         com_des_list, com_name_list = bds_ser.serial_find()
+        self.com_name_list = com_name_list
         if not com_des_list:
             com_des_list = ['未找到串口']
 
+        # 创建下拉框
         self.com_combo = QComboBox()
         self.com_combo.addItems(com_des_list)
+
+        # 尝试恢复之前保存的端口
+        saved_port = self.js_cfg.get('ser_port', '')
+        if saved_port and saved_port in self.com_name_list:
+            idx = self.com_name_list.index(saved_port)
+            if idx < self.com_combo.count():
+                self.com_combo.setCurrentIndex(idx)
 
         # 波特率
         baud_list = self.js_cfg.get('ser_baud',
@@ -565,9 +824,16 @@ class ConfigDialog(QDialog):
         self.baud_combo = QComboBox()
         self.baud_combo.addItems([str(b) for b in baud_list])
 
+        # 刷新按钮
+        refresh_btn = QPushButton("刷新串口列表")
+        refresh_btn.clicked.connect(self.refresh_ports)
+
         ser_layout.addRow("串口:", self.com_combo)
         ser_layout.addRow("波特率:", self.baud_combo)
+        ser_layout.addRow(refresh_btn)
+
         self.ser_group.setLayout(ser_layout)
+        # ======================================
 
         # 波形图配置
         wave_group = QGroupBox("波形图配置")
@@ -660,7 +926,7 @@ class ConfigDialog(QDialog):
         main_layout.addWidget(char_group)
         main_layout.addWidget(line_break_group)
         main_layout.addLayout(button_layout)
-        main_layout.addStretch()  # 添加弹性空间
+        main_layout.addStretch()
 
         # 设置内容部件到滚动区域
         scroll_area.setWidget(content_widget)
@@ -672,8 +938,44 @@ class ConfigDialog(QDialog):
         # 根据接口选择显示/隐藏对应的配置组
         self.on_interface_changed(self.jk_radio.isChecked())
 
+    def refresh_ports(self):
+        """刷新串口列表（仅更新下拉框选项，不重建控件）"""
+        try:
+            com_des_list, com_name_list = bds_ser.serial_find()
+            if not com_des_list:
+                com_des_list = ['未找到串口']
+                com_name_list = []
+            self.com_name_list = com_name_list
+
+            # 保存当前选中的端口名（如果有）
+            current_index = self.com_combo.currentIndex()
+            current_port = ''
+            if 0 <= current_index < len(self.com_name_list_old) if hasattr(self, 'com_name_list_old') else False:
+                current_port = self.com_name_list_old[current_index]
+            else:
+                # 尝试从显示文本提取
+                current_text = self.com_combo.currentText()
+                match = re.search(r'\(([^)]+)\)', current_text)
+                if match:
+                    current_port = match.group(1)
+
+            # 更新下拉框
+            self.com_combo.clear()
+            self.com_combo.addItems(com_des_list)
+
+            # 恢复选中项
+            if current_port and current_port in com_name_list:
+                idx = com_name_list.index(current_port)
+                if idx < self.com_combo.count():
+                    self.com_combo.setCurrentIndex(idx)
+
+            # 保存旧的名称列表供下次刷新使用
+            self.com_name_list_old = com_name_list[:]
+
+        except Exception as e:
+            QMessageBox.warning(self, "刷新串口失败", f"无法刷新串口列表：{str(e)}")
+
     def on_interface_changed(self, checked):
-        """根据选择的接口显示/隐藏对应的配置组"""
         if self.jk_radio.isChecked():
             self.jk_group.show()
             self.ser_group.hide()
@@ -682,9 +984,7 @@ class ConfigDialog(QDialog):
             self.ser_group.show()
 
     def on_char_format_changed(self, format_type, checked):
-        """字符编码格式互斥选择"""
         if checked:
-            # 取消选中其他选项
             if format_type == 'utf-8':
                 self.asc_check.setChecked(False)
                 self.hex_check.setChecked(False)
@@ -719,7 +1019,6 @@ class ConfigDialog(QDialog):
             self.js_cfg['jk_speed'] = int(self.jk_speed.text())
             self.js_cfg['jk_con_reset'] = self.jk_reset.isChecked()
 
-            # 保存SN号
             if self.jk_sn_input.text():
                 self.js_cfg['jk_sn'] = self.jk_sn_input.text()
 
@@ -734,15 +1033,27 @@ class ConfigDialog(QDialog):
                     return
 
             # 保存串口配置
-            baud = int(self.baud_combo.currentText())
-            self.js_cfg['ser_baud'] = bds_ser.ser_buad_list_adjust(baud, self.js_cfg['ser_baud'])
+            current_index = self.com_combo.currentIndex()
+            if 0 <= current_index < len(self.com_name_list):
+                self.js_cfg['ser_port'] = self.com_name_list[current_index]
+            else:
+                # 尝试从显示文本提取端口名
+                current_text = self.com_combo.currentText()
+                match = re.search(r'\(([^)]+)\)', current_text)
+                if match:
+                    self.js_cfg['ser_port'] = match.group(1)
+                else:
+                    self.js_cfg['ser_port'] = ''
 
+            baud = int(self.baud_combo.currentText())
+            self.js_cfg['ser_baud'] = bds_ser.ser_buad_list_adjust(
+                baud,
+                self.js_cfg['ser_baud']
+            )
             if len(self.js_cfg['ser_baud']) >= 10:
                 self.js_cfg['ser_baud'].pop()
 
-            self.js_cfg['ser_des'] = self.com_combo.currentText()
-
-            # 保存波形图配置
+            # 保存波形配置
             try:
                 y_min = int(self.y_min_input.text())
                 y_max = int(self.y_max_input.text())
@@ -753,7 +1064,7 @@ class ConfigDialog(QDialog):
                 QMessageBox.warning(self, "警告", "Y轴范围必须是整数！")
                 return
 
-            # 保存字符编码格式
+            # 保存字符编码
             if self.utf8_check.isChecked():
                 self.js_cfg['char_format'] = 'utf-8'
             elif self.asc_check.isChecked():
@@ -763,7 +1074,7 @@ class ConfigDialog(QDialog):
             elif self.gb2312_check.isChecked():
                 self.js_cfg['char_format'] = 'gb2312'
 
-            # 保存换行符设置
+            # 保存换行符
             if self.lb_rn_check.isChecked():
                 self.js_cfg['line_break'] = '\r\n'
             elif self.lb_n_check.isChecked():
@@ -798,6 +1109,16 @@ def main():
     if 'user_input_data' not in js_cfg:
         js_cfg['user_input_data'] = []
 
+    # 如果串口端口为空且当前选择的是串口模式，自动选择第一个可用串口
+    if js_cfg.get('hw_sel', '1') != '1' and not js_cfg.get('ser_port'):
+        try:
+            _, com_names = bds_ser.serial_find()
+            if com_names:
+                js_cfg['ser_port'] = com_names[0]
+                log.info(f"自动选择串口: {com_names[0]}")
+        except Exception as e:
+            log.warning(f"自动选择串口失败: {e}")
+
     # 创建应用
     app = QApplication(sys.argv)
 
@@ -815,7 +1136,7 @@ def main():
         window.hw_obj = bds_jk.BDS_Jlink(hw_error, hw_warn,
                                          char_format=js_cfg.get('char_format', 'utf-8'))
     else:
-        window.hw_obj = bds_ser.BDS_Serial(hw_error, hw_warn,
+        window.hw_obj = bds_ser.SimpleSerial(hw_error, hw_warn,
                                            char_format=js_cfg.get('char_format', 'utf-8'))
 
     # 初始化波形
@@ -824,7 +1145,7 @@ def main():
         window.hw_obj.reg_dlog_M_callback(wv.wave_data)
 
     # 启动定时器处理日志
-    window.startTimer(100)  # 每100ms处理一次日志
+    window.startTimer(5)  # 每100ms处理一次日志
 
     # 显示窗口
     window.show()

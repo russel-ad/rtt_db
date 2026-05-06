@@ -1,5 +1,7 @@
 {
     "jk_chip": [
+        "Cortex-M4",
+        "cotex m4",
         "nRF52840_xxAA",
         "STM32L412CB",
         "stm32f103C8",
@@ -12,7 +14,7 @@
     ],
     "jk_con_reset": true,
     "jk_speed": 4000,
-    "hw_sel": "2",
+    "hw_sel": "1",
     "filter": "",
     "filter_en": false,
     "font": [
@@ -22,12 +24,26 @@
     "font_size": "12",
     "tx_line": "\n",
     "user_input_data": [
+        "123",
+        "1223\n",
+        "1223\n\n",
+        "2233\n\n",
+        "2233\n",
+        "2233",
+        "1234545",
+        "123\n",
+        "112",
+        "122122\n",
+        "122\n",
+        "122",
+        "1222",
+        "1424",
         "1235658558asdfsd\nad\n12335\n\n\n12",
+        "132",
         "1235658558asdfsd\nad\n12335",
         "12356",
         "1235658558",
         "1235658558asdfsd",
-        "123",
         "1235658558asdfsd\nad\n1233"
     ],
     "curves_name": "X&&Y&&Z",
@@ -37,21 +53,21 @@
     ],
     "y_label_text": "m/s^2",
     "ser_baud": [
-        2000000,
         115200,
         941176,
+        2000000,
         1152000,
         9600,
         19200
     ],
-    "ser_com": "COM4",
-    "ser_des": "USB Serial Port (COM4)",
+    "ser_com": "COM39",
+    "ser_des": "USB-SERIAL CH340 (COM39)",
     "char_format": "asc",
     "update_flag": true,
     "line_break": "",
     "rtt_block_address": [
-        "",
-        ""
+        "0x20000000",
+        "0x4000"
     ],
     "search_history": [
         "BDS",
@@ -64,5 +80,7 @@
         "task",
         "app_",
         "cwm_algo_task"
-    ]
+    ],
+    "timestamp_en": true,
+    "ser_port": "COM38"
 }
