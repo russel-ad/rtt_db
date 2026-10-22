@@ -44,6 +44,8 @@ class SimpleSerial:
     def hw_open(self, port, baudrate, **kwargs):
         try:
             self.ser = serial.Serial(port, baudrate, timeout=0.1, **kwargs)
+            with self.lock:
+                self.read_buffer.clear()
             return True
         except Exception as e:
             self.error_callback(str(e))
@@ -82,7 +84,8 @@ class SimpleSerial:
             output_list.append(hex_str)
         else:
             try:
-                text = data.decode(self.char_format, errors='replace')
+                encoding = 'ascii' if self.char_format == 'asc' else self.char_format
+                text = data.decode(encoding, errors='replace')
                 output_list.append(text)
             except:
                 output_list.append(str(data))

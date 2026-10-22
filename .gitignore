@@ -5,3 +5,12 @@ dist/
 *.rar
 *.zip
 *.csv
+
+# Local environments, Python caches and runtime logs
+.venv/
+__pycache__/
+*.py[cod]
+aaa_log/
+
+# Dependency manifests must remain versioned despite the generic text rule
+!requirements*.txt

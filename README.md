@@ -1,4 +1,21 @@
 
+## 蓝牙 DFU 升级界面（2026-10-22 新增）
+
+上位机保留 RTT / 串口调试与资源文件发送，增加 OnMicro BLE DFU：设备扫描、名称/地址及 RSSI 筛选、ZIP 校验、单设备或多设备升级、重启后目标版本确认。批量默认并发 2 台，可设置 1～4 台；1 台为逐台升级。
+
+总进度、速度和停止按钮固定在页面底部，每台设备独立显示进度条、阶段和结果。开始升级后自动收起设置区，可随时展开。操作说明见 [批量升级](docs/BLE_DFU_BATCH.md)、[RSSI 筛选](docs/BLE_DFU_RSSI_20261022.md)及[进度显示修复](docs/BLE_DFU_PROGRESS_FIX_20261022.md)。
+
+在原有主程序依赖基础上安装 BLE 依赖，运行或打包最新版：
+
+```powershell
+python -m pip install -r requirements_ble_dfu.txt
+python rtt_ble_launcher.py
+python -m unittest discover -s tests_ble_dfu -q
+.\build_ble_dfu.ps1 -Batch -Suffix progress
+```
+
+EXE 输出到 `dist/ble_dfu_batch_progress/rtt_t2_ble_dfu_batch_progress.exe`。构建产物、升级包和运行日志不纳入 Git。已完成 73 项离线测试及 Windows 界面/蓝牙环境检查，实机升级和并发吞吐需另行验证。
+
 ## 简介
 
 RTT_T2是一个免费、易用的多功能调试工具，它将很好的替代我之前做的[RTT-T](https://gitee.com/bds123/RTT-T)。它具有如下特点：

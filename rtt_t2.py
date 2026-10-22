@@ -6,6 +6,7 @@ import time
 import re
 import datetime
 import os
+os.environ.setdefault('PYQTGRAPH_QT_LIB', 'PyQt5')
 import bds.bds_jlink as bds_jk
 import multiprocessing
 import my_serial as bds_ser
@@ -15,13 +16,15 @@ import webbrowser
 import keyboard
 import config_manager
 import traceback
-from text_searcher import TextSearcher
+import struct
+import zlib
 
 # PyQt5 导入
 from PyQt5.QtWidgets import *
 from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 from PyQt5 import QtCore
+from ble_dfu_panel import BleDfuWidget
 
 # 全局变量
 global main_window
@@ -35,6 +38,255 @@ download_thread_lock = threading.Lock()
 download_thread_lock.acquire()
 
 color_pat = re.compile(r'BDSCOL\((\d{1,8})\)', re.I)
+
+
+class ResourceSendThread(QThread):
+    """Send resource.bin with the device-side RES handshake."""
+    progress = pyqtSignal(int, int, str)
+    status = pyqtSignal(str)
+    telemetry = pyqtSignal(str)
+    completed = pyqtSignal(bool, str)
+
+    def __init__(self, window, path, chunk_size=512):
+        super().__init__(window)
+        self.window = window
+        self.path = path
+        self.chunk_size = chunk_size
+        self.stop_requested = False
+        self.device_update_requested = False
+        self.last_retry_reason = 'ACK 超时'
+
+    def stop(self):
+        self.stop_requested = True
+        with self.window.resource_message_cond:
+            self.window.resource_messages.append('RES CANCEL')
+            self.window.resource_message_cond.notify_all()
+
+    @staticmethod
+    def frame(offset, payload):
+        payload = bytes(payload)
+        return (struct.pack('<I I H H I', 0x32435352, offset,
+                            len(payload), 0, zlib.crc32(payload) & 0xffffffff)
+                + payload)
+
+    def wait_for(self, pattern, timeout=5.0):
+        deadline = time.monotonic() + timeout
+        while not self.stop_requested:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            message = self.window.wait_resource_message(remaining)
+            if message is None:
+                return None
+            if message.startswith('RES ERR'):
+                raise RuntimeError(message)
+            match = pattern.match(message.strip())
+            if match:
+                return match
+        return None
+
+    def wait_for_ack(self, expected, payload_len, timeout=8.0):
+        """Wait for this frame's ACK, ignoring late ACKs from retries."""
+        self.last_retry_reason = 'ACK 超时'
+        deadline = time.monotonic() + timeout
+        while not self.stop_requested:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            message = self.window.wait_resource_message(remaining)
+            if message is None:
+                return False
+            if message.startswith('RES ERR'):
+                raise RuntimeError(message)
+            nak = re.fullmatch(r'RES NAK (\d+) (\S+)', message.strip())
+            if nak is not None:
+                offset = int(nak.group(1))
+                if offset < expected - payload_len:
+                    continue
+                if offset != expected - payload_len:
+                    raise RuntimeError('设备重发偏移错误：期望 %d，收到 %d' %
+                                       (expected - payload_len, offset))
+                self.last_retry_reason = '设备报告 ' + nak.group(2)
+                return False
+            match = re.fullmatch(r'RES ACK (\d+) (\d+)', message.strip())
+            if match is None:
+                continue
+            received, acknowledged_len = map(int, match.groups())
+            if received == expected and acknowledged_len == payload_len:
+                return True
+            if received < expected:
+                continue
+            raise RuntimeError('设备 ACK 偏移错误：期望 %d，收到 %d' %
+                               (expected, received))
+        return False
+
+    def write(self, data, serial_chunk_size=528):
+        # J-Link RTT has a small target down-buffer.  rtt_write() can accept
+        # fewer bytes than requested; dropping the remainder corrupts a frame.
+        # Send a complete RTT frame when the target's down-buffer has room,
+        # and advance only by the byte count actually accepted. This also
+        # remains compatible with older firmware's smaller RTT buffer.
+        data = bytes(data)
+        offset = 0
+        deadline = time.monotonic() + 10.0
+        while offset < len(data):
+            with thread_lock:
+                hw = self.window.hw_obj
+                if not hw or not hw.hw_is_open():
+                    return False
+                if isinstance(hw, bds_jk.BDS_Jlink):
+                    packet = data[offset:offset + 528]
+                    written = hw.jlink.rtt_write(0, list(packet))
+                elif isinstance(hw, bds_ser.BDS_Serial):
+                    packet = data[offset:offset + serial_chunk_size]
+                    written = hw.ser.write(packet)
+                else:
+                    raise RuntimeError('不支持的资源发送接口')
+            if not isinstance(written, int) or written < 0 or written > len(packet):
+                raise RuntimeError('发送接口返回了无效的写入长度')
+            if written:
+                offset += written
+                deadline = time.monotonic() + 10.0
+            elif time.monotonic() >= deadline:
+                raise RuntimeError('发送缓冲区持续繁忙，写入超时')
+            # UART is paced by its baud rate; the device's RX FIFO now holds
+            # a complete frame. Wait only when its driver accepted nothing.
+            # RTT still needs a short yield so the host reader can run.
+            if (not isinstance(hw, bds_ser.BDS_Serial) or written == 0 or
+                    serial_chunk_size < 528):
+                time.sleep(0.002)
+        return True
+
+    def abort_transfer(self):
+        """Stop either a live binary transfer or a device already in error state."""
+        def wait_aborted(timeout):
+            deadline = time.monotonic() + timeout
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                message = self.window.wait_resource_message(remaining)
+                if message == 'RES ABORTED':
+                    return True
+                if message and message.startswith('RES NAK '):
+                    # A partial data frame was discarded; the device is now
+                    # back at a header boundary, so send the abort frame again.
+                    if not self.write(self.frame(0xffffffff, b''), serial_chunk_size=64):
+                        raise RuntimeError('中止失败，连接已断开')
+
+        if not self.write(self.frame(0xffffffff, b'')):
+            raise RuntimeError('中止失败，连接已断开')
+        if wait_aborted(0.75):
+            return
+        # After RES ERR the device parses text commands again. If it was still
+        # receiving, the binary abort above exits that mode first.
+        if not self.write(b'\r\nres abort\r\n'):
+            raise RuntimeError('中止命令发送失败，连接已断开')
+        if not wait_aborted(3.0):
+            raise RuntimeError('未收到设备中止确认，请检查连接后重试取消')
+
+    def finish_cancelled(self):
+        """Always finish the host-side cancel, even if the device is silent."""
+        try:
+            self.abort_transfer()
+        except Exception as exc:
+            self.telemetry.emit('[RESOURCE WARN] 设备中止未确认：' + str(exc))
+            self.completed.emit(False,
+                                '本地已取消；设备状态未确认，请检查连接或等待设备超时后重发')
+        else:
+            self.completed.emit(False, '已取消，请重新发送完整资源包')
+
+    def run(self):
+        try:
+            with open(self.path, 'rb') as source:
+                blob = source.read()
+            total = len(blob)
+            crc = zlib.crc32(blob) & 0xffffffff
+            self.progress.emit(0, total, '准备发送')
+            self.device_update_requested = True
+            if not self.write(('\r\nres begin %d %08x\r\n' % (total, crc)).encode('ascii')):
+                raise RuntimeError('硬件未连接')
+            if self.wait_for(re.compile(r'^RES READY$'), timeout=30.0) is None:
+                raise RuntimeError('等待设备就绪超时')
+
+            sent = 0
+            transfer_start = time.monotonic()
+            batch_frames = 0
+            batch_write_s = 0.0
+            batch_ack_s = 0.0
+            batch_retries = 0
+            while sent < total and not self.stop_requested:
+                payload = blob[sent:sent + self.chunk_size]
+                frame = self.frame(sent, payload)
+                acknowledged = False
+                for attempt in range(3):
+                    if self.stop_requested:
+                        break
+                    if attempt:
+                        batch_retries += 1
+                        self.status.emit('第 %d 字节后%s，重发第 %d 次' %
+                                         (sent, self.last_retry_reason, attempt))
+                    phase_start = time.monotonic()
+                    if not self.write(frame, serial_chunk_size=64 if attempt else 528):
+                        raise RuntimeError('发送失败，连接已断开')
+                    batch_write_s += time.monotonic() - phase_start
+                    phase_start = time.monotonic()
+                    acked = self.wait_for_ack(sent + len(payload), len(payload))
+                    batch_ack_s += time.monotonic() - phase_start
+                    if acked:
+                        acknowledged = True
+                        break
+                if self.stop_requested:
+                    break
+                if not acknowledged:
+                    raise RuntimeError('第 %d 字节后重发 2 次仍未确认' % sent)
+                sent += len(payload)
+                batch_frames += 1
+                elapsed = max(time.monotonic() - transfer_start, 0.001)
+                self.progress.emit(sent, total,
+                                   '发送中 %.1f KiB/s' % (sent / 1024.0 / elapsed))
+                if batch_frames == 16 or sent == total:
+                    self.telemetry.emit(
+                        '[RESOURCE PERF] %d 帧平均：接口写入 %.1f ms，等待 ACK %.1f ms，重发 %d 次' %
+                        (batch_frames, batch_write_s * 1000 / batch_frames,
+                         batch_ack_s * 1000 / batch_frames, batch_retries))
+                    batch_frames = 0
+                    batch_write_s = 0.0
+                    batch_ack_s = 0.0
+                    batch_retries = 0
+
+            if self.stop_requested:
+                self.finish_cancelled()
+                return
+
+            if not self.write(self.frame(total, b'')):
+                raise RuntimeError('发送完成帧失败')
+            match = self.wait_for(re.compile(r'^RES DONE (\d+) ([0-9A-Fa-f]+)$'))
+            if match is None or int(match.group(1)) != total or int(match.group(2), 16) != crc:
+                raise RuntimeError('设备校验失败')
+            self.progress.emit(total, total, '发送完成')
+            self.completed.emit(True, '资源写入完成，设备将自动重启')
+        except Exception as exc:
+            if self.stop_requested:
+                self.finish_cancelled()
+            else:
+                self.completed.emit(False, str(exc))
+
+
+class ResourceAbortThread(ResourceSendThread):
+    """Allow Cancel to finish device cleanup after an upload has failed."""
+
+    def __init__(self, window):
+        super().__init__(window, '')
+
+    def run(self):
+        try:
+            self.abort_transfer()
+            self.completed.emit(True, '已取消，请重新发送完整资源包')
+        except Exception as exc:
+            self.telemetry.emit('[RESOURCE WARN] 设备中止未确认：' + str(exc))
+            self.completed.emit(False,
+                                '本地已取消；设备状态未确认，请检查连接或等待设备超时后重发')
 
 # 颜色定义
 COLOR_BLACK = '#000000'
@@ -130,12 +382,20 @@ class MainWindow(QMainWindow):
         self.js_cfg = js_cfg
         self.hw_obj = None
         self.log_remain_str = ''
+        self.log_remain_since = None
         self.real_time_save_file_name = ''
+        self.resource_rx_text = ''
+        self.resource_messages = []
+        self.resource_message_cond = threading.Condition()
+        self.resource_thread = None
+        self.resource_abort_thread = None
+        self.resource_needs_abort = False
+        self.resource_cancel_requested = False
         self.init_ui()
 
     def init_ui(self):
         # 设置窗口属性
-        self.setWindowTitle('RTT调试工具 v2.7.0')
+        self.setWindowTitle('RTT调试工具 v2.7.1 · BLE DFU')
         self.setGeometry(100, 100, 1200, 800)
 
         # 创建中心部件
@@ -218,6 +478,29 @@ class MainWindow(QMainWindow):
         send_layout.addWidget(self.data_type_combo)
         send_layout.addWidget(self.data_input, 1)
 
+        # resource.bin transfer controls
+        resource_group = QGroupBox('资源文件发送')
+        resource_layout = QGridLayout(resource_group)
+        default_resource_path = r'E:\onm\SC201_master_omn\projects\ble_app_multilink\resource\resource.bin'
+        self.resource_path = QLineEdit(self.js_cfg.get('resource_path') or default_resource_path)
+        self.resource_browse_btn = QPushButton('选择文件')
+        self.resource_browse_btn.clicked.connect(self.on_resource_browse)
+        self.resource_send_btn = QPushButton('发送资源')
+        self.resource_send_btn.clicked.connect(self.on_resource_send)
+        self.resource_cancel_btn = QPushButton('取消')
+        self.resource_cancel_btn.setEnabled(False)
+        self.resource_cancel_btn.clicked.connect(self.on_resource_cancel)
+        self.resource_progress = QProgressBar()
+        self.resource_progress.setRange(0, 1000)
+        self.resource_status = QLabel('未发送')
+        resource_layout.addWidget(QLabel('文件:'), 0, 0)
+        resource_layout.addWidget(self.resource_path, 0, 1)
+        resource_layout.addWidget(self.resource_browse_btn, 0, 2)
+        resource_layout.addWidget(self.resource_send_btn, 0, 3)
+        resource_layout.addWidget(self.resource_cancel_btn, 0, 4)
+        resource_layout.addWidget(self.resource_progress, 1, 0, 1, 4)
+        resource_layout.addWidget(self.resource_status, 1, 4)
+
         # 历史数据
         history_layout = QHBoxLayout()
         history_label = QLabel("历史数据:")
@@ -237,6 +520,7 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(filter_group)
         main_layout.addWidget(self.log_text, 1)
         main_layout.addLayout(send_layout)
+        main_layout.addWidget(resource_group)
         main_layout.addLayout(history_layout)
 
         # 状态栏
@@ -246,8 +530,36 @@ class MainWindow(QMainWindow):
         # 菜单栏
         self.create_menu()
 
+        # Keep the existing RTT/serial workspace intact inside its own tab.
+        original_workspace = self.takeCentralWidget()
+        self.workspace_tabs = QTabWidget()
+        self.workspace_tabs.addTab(original_workspace, 'RTT / 串口调试')
+        self.ble_dfu_page = BleDfuWidget(self, upgrade_guard=self.ble_upgrade_guard)
+        self.workspace_tabs.addTab(self.ble_dfu_page, '蓝牙 DFU 升级')
+        self.setCentralWidget(self.workspace_tabs)
+        self.ble_dfu_page.closed.connect(self.close)
+        self.ble_dfu_page.upgrade_active.connect(self.on_ble_upgrade_active)
+
         # 启动硬件读取线程
         self.start_hw_thread()
+
+    def ble_upgrade_guard(self):
+        for job in (self.resource_thread, self.resource_abort_thread):
+            if job and job.isRunning():
+                return '资源传输正在进行，请完成后再开始蓝牙升级'
+        return None
+
+    def on_ble_upgrade_active(self, active):
+        # Passive RTT logging remains available during DFU; prevent host-side
+        # resets or another write operation from interrupting the selected MCU.
+        controls = (self.connect_btn, self.send_btn, self.resource_send_btn, self.resource_cancel_btn)
+        if active:
+            self._ble_saved_enabled = [control.isEnabled() for control in controls]
+            for control in controls:
+                control.setEnabled(False)
+        else:
+            for control, enabled in zip(controls, getattr(self, '_ble_saved_enabled', [True] * len(controls))):
+                control.setEnabled(enabled)
 
     def create_menu(self):
         menubar = self.menuBar()
@@ -287,7 +599,9 @@ class MainWindow(QMainWindow):
         # 1. 从硬件读取原始数据
         raw_log = []
         self.hw_obj.read_data_queue(raw_log)
-        if not raw_log:
+        for chunk in raw_log:
+            self.feed_resource_messages(chunk)
+        if not raw_log and not self.log_remain_str:
             return
 
         # 2. HEX 模式直接输出
@@ -310,7 +624,7 @@ class MainWindow(QMainWindow):
         lines = combined.splitlines(keepends=False)
 
         # 6. 处理最后一行是否完整
-        if not combined.endswith('\n'):
+        if not combined.endswith(('\n', '\r')):
             # 最后一行不完整，保存到缓存
             if lines:
                 self.log_remain_str = lines[-1]
@@ -318,11 +632,24 @@ class MainWindow(QMainWindow):
             else:
                 # 全部不完整（可能数据量小），直接作为一行输出（避免永久缓存）
                 if len(combined) > 0:
-                    # 强制输出这一条不完整行，并清空缓存
-                    lines = [combined]
-                    self.log_remain_str = ''
+                    self.log_remain_str = combined
                 else:
                     return
+
+        # Coalesce data without a line ending until the RX stream has been
+        # idle for a short period. Reset the idle timer for every new chunk;
+        # serial drivers may return one echo in several reads.
+        if self.log_remain_str:
+            now_monotonic = time.monotonic()
+            if raw_log:
+                self.log_remain_since = now_monotonic
+            if (not raw_log and self.log_remain_since is not None and
+                    now_monotonic - self.log_remain_since >= 0.25):
+                lines.append(self.log_remain_str)
+                self.log_remain_str = ''
+                self.log_remain_since = None
+        else:
+            self.log_remain_since = None
 
         # 7. 如果没有完整行且没有强制输出，返回
         if not lines:
@@ -631,6 +958,121 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, "错误", f"启动波形失败: {str(e)}")
 
+    def feed_resource_messages(self, chunk):
+        """Extract ASCII RES replies without disturbing the normal log."""
+        if not isinstance(chunk, str):
+            return
+        with self.resource_message_cond:
+            self.resource_rx_text += chunk
+            while '\n' in self.resource_rx_text:
+                line, self.resource_rx_text = self.resource_rx_text.split('\n', 1)
+                line = line.strip('\r')
+                if line.startswith('RES '):
+                    self.resource_messages.append(line)
+            self.resource_message_cond.notify_all()
+
+    def wait_resource_message(self, timeout):
+        deadline = time.monotonic() + timeout
+        with self.resource_message_cond:
+            while not self.resource_messages:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+                self.resource_message_cond.wait(remaining)
+            return self.resource_messages.pop(0)
+
+    def on_resource_browse(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, '选择资源文件', self.resource_path.text() or '',
+            'Binary files (*.bin);;All files (*)')
+        if path:
+            self.resource_path.setText(path)
+            self.js_cfg['resource_path'] = path
+
+    def on_resource_send(self):
+        if self.resource_needs_abort or (self.resource_abort_thread and
+                                         self.resource_abort_thread.isRunning()):
+            return
+        if self.resource_thread and self.resource_thread.isRunning():
+            return
+        if not self.hw_obj or not self.hw_obj.hw_is_open():
+            QMessageBox.warning(self, '资源发送', '请先连接硬件')
+            return
+        path = self.resource_path.text().strip()
+        if not path or not os.path.isfile(path):
+            QMessageBox.warning(self, '资源发送', '请选择有效的 resource.bin 文件')
+            return
+        size = os.path.getsize(path)
+        if size == 0 or size > 0x40000:
+            QMessageBox.warning(self, '资源发送', '文件大小必须在 1 到 400 KiB 之间')
+            return
+        # ACK replies are ASCII even when the normal log is configured as HEX.
+        self.hw_obj.char_format = 'asc'
+        with self.resource_message_cond:
+            self.resource_messages.clear()
+            self.resource_rx_text = ''
+        self.js_cfg['resource_path'] = path
+        self.resource_progress.setValue(0)
+        self.resource_status.setText('启动发送')
+        self.resource_cancel_requested = False
+        self.resource_send_btn.setEnabled(False)
+        self.resource_cancel_btn.setEnabled(True)
+        self.resource_thread = ResourceSendThread(self, path)
+        self.resource_thread.progress.connect(self.on_resource_progress)
+        self.resource_thread.status.connect(self.resource_status.setText)
+        self.resource_thread.telemetry.connect(self.log_text.append)
+        self.resource_thread.completed.connect(self.on_resource_finished)
+        self.resource_thread.start()
+
+    def on_resource_cancel(self):
+        if not self.resource_needs_abort and self.resource_thread and self.resource_thread.isRunning():
+            if self.resource_cancel_requested:
+                return
+            self.resource_cancel_requested = True
+            self.resource_cancel_btn.setEnabled(False)
+            self.resource_thread.stop()
+            self.resource_status.setText('正在取消')
+            return
+        if not self.resource_needs_abort or (self.resource_abort_thread and
+                                             self.resource_abort_thread.isRunning()):
+            return
+        with self.resource_message_cond:
+            self.resource_messages.clear()
+            self.resource_rx_text = ''
+        self.resource_cancel_btn.setEnabled(False)
+        self.resource_status.setText('正在中止设备更新')
+        self.resource_abort_thread = ResourceAbortThread(self)
+        self.resource_abort_thread.telemetry.connect(self.log_text.append)
+        self.resource_abort_thread.completed.connect(self.on_resource_abort_finished)
+        self.resource_abort_thread.start()
+
+    def on_resource_progress(self, sent, total, status):
+        self.resource_progress.setValue(int(sent * 1000 / total) if total else 0)
+        self.resource_status.setText('%s: %d/%d bytes' % (status, sent, total))
+
+    def on_resource_finished(self, ok, message):
+        cancelled = self.resource_thread.stop_requested
+        self.resource_cancel_requested = False
+        self.resource_needs_abort = (not ok and not cancelled and
+                                     self.resource_thread.device_update_requested)
+        self.resource_send_btn.setEnabled(not self.resource_needs_abort)
+        self.resource_cancel_btn.setEnabled(self.resource_needs_abort)
+        self.resource_status.setText(message)
+        self.status_bar.showMessage(message)
+        if not ok and not cancelled:
+            self.log_text.append('[RESOURCE ERR] ' + message)
+
+    def on_resource_abort_finished(self, ok, message):
+        # A missing RES ABORTED cannot trap the PC UI in a mandatory retry.
+        # The device may still be in the update screen until its idle timeout.
+        self.resource_needs_abort = False
+        self.resource_send_btn.setEnabled(True)
+        self.resource_cancel_btn.setEnabled(False)
+        self.resource_status.setText(message)
+        self.status_bar.showMessage(message)
+        if not ok:
+            self.log_text.append('[RESOURCE WARN] ' + message)
+
     def on_send_data(self):
         if not self.hw_obj or not self.hw_obj.hw_is_open():
             QMessageBox.warning(self, "警告", "请先连接硬件！")
@@ -710,6 +1152,9 @@ class MainWindow(QMainWindow):
         self.log_process()
 
     def closeEvent(self, event):
+        if not self.ble_dfu_page.request_shutdown():
+            event.ignore()
+            return
         # 清理资源
         if self.hw_obj:
             self.hw_obj.hw_close()
