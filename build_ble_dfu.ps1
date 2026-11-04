@@ -49,6 +49,8 @@ try {
         --name $executableName --icon (Join-Path $PSScriptRoot 'tool.ico') `
         --exclude-module scipy --exclude-module PySide6 --exclude-module PyQt6 `
         --hidden-import keyboard --hidden-import pystray._win32 `
+        --collect-data certifi --hidden-import truststore._windows `
+        --copy-metadata certifi --copy-metadata truststore `
         --collect-submodules bleak.backends.winrt --collect-all winrt --copy-metadata bleak `
         --collect-binaries sc201_workbench `
         --hidden-import PyQt5.QtBluetooth --hidden-import PyQt5.QtNetwork `

@@ -13,6 +13,7 @@ from PyQt5.QtCore import QEvent, QObject, QTimer, Qt, pyqtSignal
 from PyQt5.QtWidgets import QAction, QApplication, QHBoxLayout, QLabel, QMessageBox, QProgressBar, QWidget
 from . import APP_VERSION
 from .core import UpdateError, atomic_json, check_and_stage, read_json
+from .tls import diagnostics as tls_diagnostics
 
 
 def error_summary(error):
@@ -24,7 +25,7 @@ def error_summary(error):
         return '更新信息获取失败，各更新入口暂不可用，请查看详情'
     reason = getattr(error, 'reason', error)
     if isinstance(reason, ssl.SSLCertVerificationError):
-        return 'HTTPS 证书校验失败，请检查电脑日期和网络'
+        return 'HTTPS 证书链校验失败，请查看更新详情中的证书诊断'
     if isinstance(error, urllib.error.HTTPError):
         return '更新服务器返回 HTTP ' + str(error.code)
     if isinstance(reason, TimeoutError):
@@ -204,6 +205,7 @@ class AutoUpdater(QObject):
         diagnostic = {'current_version': APP_VERSION, 'target_version': self.target_version,
             'feed_url': feed, 'download': self.last_transfer, 'error': self.last_error,
             'manifest_source': read_json(self.home / 'manifest-source.json', {}),
+            'https': tls_diagnostics(),
             'error_log': str(self.home / 'last-check-error.json')}
         dialog.setDetailedText(json.dumps(diagnostic, ensure_ascii=False, indent=2))
         dialog.exec_()
@@ -245,6 +247,7 @@ class AutoUpdater(QObject):
                     'feed_url': self.settings.get('feed_url')}
                 from .download import DownloadInterrupted
                 details['resumable'] = isinstance(error, DownloadInterrupted)
+                details['https'] = tls_diagnostics(error)
                 if hasattr(error, 'attempts'):
                     details['manifest_attempts'] = error.attempts
                 try:

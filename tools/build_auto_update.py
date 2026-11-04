@@ -46,6 +46,8 @@ def main():
     command = [sys.executable, '-m', 'PyInstaller', '--noconfirm', '--onedir', '--windowed',
                '--name', 'RTTTool', '--icon', str(ROOT/'tool.ico'), '--exclude-module', 'PyQt5',
                '--exclude-module', 'PySide6', '--exclude-module', 'numpy',
+               '--collect-data', 'certifi', '--hidden-import', 'truststore._windows',
+               '--copy-metadata', 'certifi', '--copy-metadata', 'truststore',
                '--distpath', str(launcher_dist), '--workpath', str(proof/'launcher-work'),
                '--specpath', str(proof), str(ROOT/'rtt_update_launcher.py')]
     with (proof/'launcher-build.log').open('wb') as log:

@@ -13,6 +13,42 @@ import threading
 
 from . import APP_ENTRY, APP_ID, APP_VERSION
 from .core import UpdateError, atomic_json, check_and_stage, file_lock, read_json, version
+from .tls import certificate_error, diagnostics as tls_diagnostics
+
+
+def failure_details(error):
+    result = {'at': datetime.now(timezone.utc).isoformat(), 'helper_version': APP_VERSION,
+        'error_type': type(error).__name__, 'error': str(error)[:4096],
+        'https': tls_diagnostics(error), 'hardware_access': False}
+    if hasattr(error, 'attempts'):
+        result['manifest_attempts'] = error.attempts
+    result['summary'] = ('HTTPS 证书链校验失败，请点击“HTTPS 诊断”查看证书错误码'
+                         if certificate_error(error) else '更新未完成：' + str(error)[:230])
+    return result
+
+
+def check_https():
+    """Probe only signed official metadata and its package, without staging."""
+    from .core import fetch, verify
+    from .manifest import read_manifest
+    result = {'passed': False, 'helper_version': APP_VERSION, 'https': tls_diagnostics(),
+        'hardware_access': False, 'installed': False, 'staged': False,
+        'at': datetime.now(timezone.utc).isoformat()}
+    try:
+        settings = read_json(Path(__file__).with_name('release_config.json'))
+        envelope, source = read_manifest(settings, opener=lambda url: fetch(url, timeout=15, attempts=1))
+        payload = verify(envelope, settings['public_keys'])
+        result.update(manifest_source=source, target_version=payload['version'], signature='Ed25519 PASS')
+        from urllib.parse import urlsplit
+        with fetch(payload['url'], timeout=20, attempts=1) as response:
+            result['package_host'] = urlsplit(response.geturl()).hostname
+            if response.read(4) != b'PK\x03\x04':
+                raise UpdateError('更新包 HTTPS 探测返回了非 ZIP 内容')
+        result['passed'] = True
+        result['package_probe_only'] = True
+    except Exception as error:
+        result.update(failure_details(error))
+    return result
 
 
 def base_version(root):
@@ -50,7 +86,7 @@ def prepare(root, home, *, settings=None, progress=lambda text: None, on_transfe
                 'target_version': payload['version'] if payload else current,
                 'original_launcher': str(root/'RTTTool.exe'), 'home': str(home),
                 'hardware_access': False, 'installed_by_repair': False,
-                'at': datetime.now(timezone.utc).isoformat()}
+                'at': datetime.now(timezone.utc).isoformat(), 'https': tls_diagnostics()}
             atomic_json(home/'last-repair-result.json', result)
             return result
     except UpdateError as error:
@@ -66,8 +102,13 @@ def main():
     parser.add_argument('--headless', action='store_true', help='Stage only, without starting any application')
     parser.add_argument('--report', type=Path)
     parser.add_argument('--ui-check', type=Path, help='Render a simulated preview, write proof, then exit')
+    parser.add_argument('--tls-check', type=Path, help='Probe verified HTTPS without installing or staging')
     args = parser.parse_args()
     home = args.home or Path(os.environ.get('LOCALAPPDATA', Path.home()))/'RTTTool/updates'
+    if args.tls_check:
+        report = check_https()
+        atomic_json(args.tls_check, report)
+        return 0 if report['passed'] else 1
     if args.headless:
         if not args.root or not args.home or not args.report:
             parser.error('Headless verification requires explicit --root, --home and --report')
@@ -77,7 +118,7 @@ def main():
             result = prepare(args.root.resolve(), home.resolve(),
                 progress=lambda text: log({'status': text}), on_transfer=log)
         except Exception as error:
-            result = {'passed': False, 'error_type': type(error).__name__, 'error': str(error), 'hardware_access': False}
+            result = {'passed': False, **failure_details(error)}
         atomic_json(args.report, result)
         return 0 if result['passed'] else 1
 
@@ -114,9 +155,10 @@ def main():
     events = queue.Queue()
     running = False
     launch_root = None
+    ready_to_launch = False
 
     def start():
-        nonlocal running, launch_root
+        nonlocal running, launch_root, ready_to_launch
         if running:
             return
         selected_file = Path(selected.get())
@@ -125,10 +167,12 @@ def main():
             return
         launch_root = selected_file.resolve().parent
         running = True
+        ready_to_launch = False
         download.configure(state='disabled')
         choose.configure(state='disabled')
         entry.configure(state='disabled')
         launch.configure(state='disabled')
+        diagnose.configure(state='disabled')
         def work():
             try:
                 result = prepare(launch_root, home,
@@ -136,10 +180,7 @@ def main():
                     on_transfer=lambda data: events.put(('transfer', data)))
                 events.put(('done', result))
             except Exception as error:
-                details = {'at': datetime.now(timezone.utc).isoformat(),
-                    'error_type': type(error).__name__, 'error': str(error), 'hardware_access': False}
-                if hasattr(error, 'attempts'):
-                    details['manifest_attempts'] = error.attempts
+                details = failure_details(error)
                 try:
                     atomic_json(home/'last-repair-error.json', details)
                 except OSError:
@@ -168,8 +209,41 @@ def main():
     launch = ttk.Button(buttons, text='启动上位机', state='disabled', command=launch_application)
     launch.pack(side='left', padx=8)
 
-    def poll():
+    def diagnose_https():
         nonlocal running
+        if running:
+            return
+        running = True
+        for control in (download, choose, entry, launch, diagnose):
+            control.configure(state='disabled')
+        status.set('正在诊断更新清单及安装包的 HTTPS 连接…')
+        def work():
+            report = check_https()
+            try:
+                atomic_json(home/'last-https-check.json', report)
+            except OSError:
+                pass
+            events.put(('diagnostic', report))
+        threading.Thread(target=work, name='update-https-diagnostic', daemon=True).start()
+    diagnose = ttk.Button(buttons, text='HTTPS 诊断', command=diagnose_https)
+    diagnose.pack(side='right')
+
+    def show_diagnostic(report):
+        dialog = tk.Toplevel(window)
+        dialog.title('上位机更新 HTTPS 诊断')
+        dialog.geometry('760x540')
+        content = json.dumps(report, ensure_ascii=False, indent=2)
+        text = tk.Text(dialog, wrap='word', padx=12, pady=12)
+        text.pack(fill='both', expand=True)
+        text.insert('1.0', content)
+        text.configure(state='disabled')
+        def copy():
+            dialog.clipboard_clear()
+            dialog.clipboard_append(content)
+        ttk.Button(dialog, text='复制诊断', command=copy).pack(pady=8)
+
+    def poll():
+        nonlocal running, ready_to_launch
         while True:
             try:
                 kind, value = events.get_nowait()
@@ -190,12 +264,18 @@ def main():
                 download.configure(state='normal')
                 choose.configure(state='normal')
                 entry.configure(state='normal')
+                diagnose.configure(state='normal')
                 if kind == 'done':
                     status.set('更新包已准备好，点击“启动上位机”完成切换。' if value['staged']
                         else '当前没有可安装的新版本，可以启动上位机。')
-                    launch.configure(state='normal')
+                    ready_to_launch = True
+                elif kind == 'diagnostic':
+                    status.set('HTTPS 诊断通过：清单验签与安装包连接正常' if value['passed']
+                               else value.get('summary', 'HTTPS 诊断失败，请查看诊断详情'))
+                    show_diagnostic(value)
                 else:
-                    status.set('更新未完成：' + value['error'][:230])
+                    status.set(value['summary'])
+                launch.configure(state='normal' if ready_to_launch else 'disabled')
         window.after(100, poll)
     poll()
     if args.ui_check:

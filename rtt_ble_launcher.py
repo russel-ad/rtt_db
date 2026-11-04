@@ -141,6 +141,12 @@ def self_test():
     report["batch_preview_simulated"] = args.batch_preview
     report["factory_preview_simulated"] = args.factory_preview
     if update_preview:
+        from app_update.tls import create_context, diagnostics
+        from app_update import APP_VERSION
+        context = create_context()
+        report['app_update_https'] = dict(diagnostics(), application_version=APP_VERSION,
+            context_checks_hostname=context.check_hostname,
+            context_requires_certificate=int(context.verify_mode) == 2)
         report['app_update_preview'] = {'simulated': True,
             'value': update_preview.progress_bar.value(), 'percent': update_preview.progress_bar.format(),
             'numbers': update_preview.numbers.text(), 'status': update_preview.label.text()}

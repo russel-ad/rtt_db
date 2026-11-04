@@ -133,13 +133,14 @@ class HttpsRedirect(urllib.request.HTTPRedirectHandler):
 
 def fetch(url, *, offset=0, timeout=45, attempts=3, on_retry=lambda attempt: None):
     https_url(url)
+    from .tls import VerifiedHTTPS
     headers = {'User-Agent': 'RTTTool-Updater/1', 'Cache-Control': 'no-cache', 'Accept-Encoding': 'identity'}
     if offset:
         headers['Range'] = 'bytes=' + str(offset) + '-'
     request = urllib.request.Request(url, headers=headers)
     for attempt in range(attempts):
         try:
-            response = urllib.request.build_opener(HttpsRedirect()).open(request, timeout=timeout)
+            response = urllib.request.build_opener(HttpsRedirect(), VerifiedHTTPS()).open(request, timeout=timeout)
             try:
                 https_url(response.geturl())
             except Exception:

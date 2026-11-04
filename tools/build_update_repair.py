@@ -29,6 +29,8 @@ def main():
     command = [sys.executable, '-m', 'PyInstaller', '--noconfirm', '--onedir', '--windowed',
         '--name', 'RTTTool_UpdateRepair', '--icon', str(ROOT/'tool.ico'),
         '--paths', str(ROOT), '--add-data', str(ROOT/'app_update/release_config.json') + ';app_update',
+        '--collect-data', 'certifi', '--hidden-import', 'truststore._windows',
+        '--copy-metadata', 'certifi', '--copy-metadata', 'truststore',
         '--exclude-module', 'PyQt5', '--exclude-module', 'PySide6', '--exclude-module', 'numpy',
         '--distpath', str(temporary), '--workpath', str(proof/'work'), '--specpath', str(proof),
         str(ROOT/'tools/repair_auto_update.py')]
