@@ -1,0 +1,18 @@
+{
+  "Qt-LGPL-3.0.txt": {
+    "url": "https://raw.githubusercontent.com/qt/qtbase/v5.15.2/LICENSE.LGPL3",
+    "sha256": "da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768"
+  },
+  "Qt-GPL-3.0.txt": {
+    "url": "https://raw.githubusercontent.com/qt/qtbase/v5.15.2/LICENSE.GPL3",
+    "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+  },
+  "Qt-GPL-2.0.txt": {
+    "url": "https://raw.githubusercontent.com/qt/qtbase/v5.15.2/LICENSE.GPL2",
+    "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+  },
+  "OpenSSL-1.1.1-LICENSE.txt": {
+    "url": "https://raw.githubusercontent.com/openssl/openssl/OpenSSL_1_1_1w/LICENSE",
+    "sha256": "c32913b33252e71190af2066f08115c69bc9fddadf3bf29296e20c835389841c"
+  }
+}

@@ -1,20 +1,67 @@
+# RTT 调试工具与 SC201 设备工作台
 
-## 蓝牙 DFU 升级界面（2026-10-22 新增）
+当前源码版本 **v2.10.3**，适用 Windows x64。集成 RTT／串口调试、原厂 BLE DFU、出厂配对、SC201 设备工作台，以及上位机程序自动更新。
 
-上位机保留 RTT / 串口调试与资源文件发送，增加 OnMicro BLE DFU：设备扫描、名称/地址及 RSSI 筛选、ZIP 校验、单设备或多设备升级、重启后目标版本确认。批量默认并发 2 台，可设置 1～4 台；1 台为逐台升级。
+## 下载与运行
 
-总进度、速度和停止按钮固定在页面底部，每台设备独立显示进度条、阶段和结果。开始升级后自动收起设置区，可随时展开。操作说明见 [批量升级](docs/BLE_DFU_BATCH.md)、[RSSI 筛选](docs/BLE_DFU_RSSI_20261022.md)及[进度显示修复](docs/BLE_DFU_PROGRESS_FIX_20261022.md)。
+从 [GitHub 正式发行版](https://github.com/russel-ad/rtt_db/releases/latest) 下载便携 ZIP，完整解压后运行顶层 `RTTTool.exe`，保留 `_internal` 和其他依赖文件。EXE、更新包及设备固件通过发行附件分发，`build/`、`dist/`、日志和用户资料不纳入源码提交。
 
-在原有主程序依赖基础上安装 BLE 依赖，运行或打包最新版：
+旧版显示“正在下载”后又提示更新不可用，可使用 [下载修复说明](docs/UPDATE_DOWNLOAD_REPAIR.md) 中的独立工具；首次修复完成后继续使用程序内更新。
+
+## 当前功能
+
+| 模块 | 功能 |
+| --- | --- |
+| RTT／串口 | 日志过滤、资源发送、动态波形；J-Link DLL 延迟至连接时加载 |
+| 蓝牙 DFU | 名称／地址／RSSI 筛选，主从分区及升级包校验，多设备升级与重启验版 |
+| 出厂配对 | 单秤／双秤套装身份核对、保存回读、返工及断电后纯 BLE 复验 |
+| SC201 工作台 | 日常操作、固件升级、工厂生产、连接测试、资料与调试 |
+| 多设备升级 | 1～4 台独立会话，3～4 台先完成认证再并发传输，逐台进度与结果导出 |
+| 上位机更新 | 签名清单、后台下载、实时进度、断线续传、空闲切换与首次启动失败回退 |
+
+工作台 RSSI 默认过滤为 **≥ −60 dBm**；批量升级默认开启“确认后立即推进”，缩小固件块和吞吐偏好默认关闭。现场升级速度还取决于设备端固件、蓝牙适配器和射频环境，实测范围见 [修改记录](CHANGELOG.md)。
+
+## 源码运行与构建
+
+使用 Python 3.11 x64：
 
 ```powershell
-python -m pip install -r requirements_ble_dfu.txt
+python -m pip install -r requirements.txt
 python rtt_ble_launcher.py
-python -m unittest discover -s tests_ble_dfu -q
-.\build_ble_dfu.ps1 -Batch -Suffix progress
 ```
 
-EXE 输出到 `dist/ble_dfu_batch_progress/rtt_t2_ble_dfu_batch_progress.exe`。构建产物、升级包和运行日志不纳入 Git。已完成 73 项离线测试及 Windows 界面/蓝牙环境检查，实机升级和并发吞吐需另行验证。
+仓库包含运行所需的原生桥接 DLL、HTTPS／VC 运行库及许可证，构建摘要记录在各模块的 `native/build.json`。重新编译原生组件需要外部 SC201 工程及对应 C++／Qt 工具链，路径通过构建参数指定，详见 [工作台集成](docs/SC201_WORKBENCH.md) 和 [出厂配对](docs/BLE_FACTORY_PAIR.md)。原 RTT 波形的自定义 pyqtgraph 场景信号说明保留在 [历史源码说明](docs/source_code.md)。
+
+```powershell
+python -m pip install -r requirements-build.txt
+powershell -NoProfile -ExecutionPolicy Bypass -File ./build_ble_dfu.ps1 -Workbench -OneDir -Suffix local
+```
+
+自动更新基础包与签名发布包的构建、发布密钥保管和更新入口配置见 [自动更新说明](docs/AUTO_UPDATE.md)。发布私钥保存在仓库外，源码仅包含发布公钥。
+
+## 回归测试
+
+以下测试使用隔离资料和模拟会话，不自动连接或刷写实机：
+
+```powershell
+python -m unittest discover -s tests_app_update -v
+python -m unittest discover -s tests_workbench -v
+python -m unittest discover -s tests_factory_pair -v
+python -m unittest discover -s tests_ble_dfu -v
+```
+
+原生批量调度测试的构建入口为 `python -m sc201_workbench.build_native --tests`，依赖外部 SC201 工程。BLE 主机历史夹具用例需要 `ONMICRO_HOST_VALIDATION_DIR`；缺少夹具时显式跳过。
+
+## 文档导航
+
+- [当前修改点与验证范围](CHANGELOG.md)
+- [SC201 工作台](docs/SC201_WORKBENCH.md)／[多设备固件升级](docs/SC201_BATCH_OTA.md)
+- [原厂 BLE DFU](docs/BLE_DFU.md)／[BLE 出厂配对](docs/BLE_FACTORY_PAIR.md)
+- [上位机自动更新](docs/AUTO_UPDATE.md)／[旧版下载修复](docs/UPDATE_DOWNLOAD_REPAIR.md)
+- [便携启动说明](docs/PORTABLE_START.md)／[J-Link 组件加载](docs/JLINK_DLL_STARTUP_FIX_20261022.md)
+- [历次实现与性能对照记录](docs/SC201_HOST_HISTORY.md)
+
+以下保留原 RTT／串口工具的功能与使用说明。
 
 ## 简介
 

@@ -30,7 +30,7 @@ def parser() -> argparse.ArgumentParser:
     scan.add_argument("--name", help="Case-insensitive name substring; do not filter by DFU advertisement")
     check = commands.add_parser("check", help="Validate a ZIP offline; no Bluetooth needed")
     check.add_argument("package", type=Path)
-    check.add_argument("--layout", choices=("legacy", "expanded"), default="legacy")
+    check.add_argument("--layout", choices=("legacy", "expanded", "host752"), default="legacy")
     probe = commands.add_parser("probe", help="Connect and query ROM ID/version; no DFU objects created")
     upgrade = commands.add_parser("upgrade", help="Write APP, commit, and verify reboot/version")
     for command in (probe, upgrade):
@@ -39,8 +39,8 @@ def parser() -> argparse.ArgumentParser:
         command.add_argument("--timeout", type=float, default=15.0)
     upgrade.add_argument("--package", required=True, type=Path)
     upgrade.add_argument("--expect-version", required=True, help="DIS software version required after reboot")
-    upgrade.add_argument("--layout", choices=("legacy", "expanded"), default="legacy",
-                         help="legacy: <=280 KiB; expanded: <=400 KiB, only for already migrated devices")
+    upgrade.add_argument("--layout", choices=("legacy", "expanded", "host752"), default="legacy",
+                         help="scale legacy <=280 KiB; scale expanded <=400 KiB; host752 <=752 KiB")
     upgrade.add_argument("--allow-same-version", action="store_true", help="Explicitly permit reinstalling the current version")
     upgrade.add_argument("--chunk-size", type=int, default=0, help="0=auto (up to 128); 20 for conservative testing")
     upgrade.add_argument("--prn", type=int, default=8, help="Packets per verified receipt (1..255)")
@@ -53,7 +53,7 @@ def parser() -> argparse.ArgumentParser:
 
 async def run(args) -> int:
     if args.command == "check":
-        package = FirmwarePackage.load(args.package, expanded=args.layout == "expanded")
+        package = FirmwarePackage.load(args.package, expanded="host752" if args.layout == "host752" else args.layout == "expanded")
         print(json.dumps(package.describe(), indent=2))
         return 0
 
@@ -73,7 +73,7 @@ async def run(args) -> int:
             print(json.dumps(await connection.information(), indent=2))
         return 0
 
-    package = FirmwarePackage.load(args.package, expanded=args.layout == "expanded")
+    package = FirmwarePackage.load(args.package, expanded="host752" if args.layout == "host752" else args.layout == "expanded")
     if package.version is not None and package.version != args.expect_version:
         raise DfuError(f"ZIP contains {package.version}, not requested {args.expect_version}")
     if (not all(math.isfinite(n) and n > 0 for n in
@@ -98,10 +98,7 @@ async def run(args) -> int:
                             address_type=args.address_type) as connection:
         info = await connection.information()
         LOG.info("Device %s", json.dumps(info))
-        if (info["rom_id"] != f"0x{package.rom_id:08X}" or
-                info["execution_address"] != "0x00404000" or
-                info["boot_marker"] != "0x46533252"):
-            raise DfuError("Device ROM ID or normal-boot layout differs from the package")
+        package.validate_device(info)
         if info["software_version"] == args.expect_version and not args.allow_same_version:
             raise DfuError("Device already reports target version; use --allow-same-version to reinstall")
         session = DfuSession(connection, options, progress)
@@ -110,8 +107,12 @@ async def run(args) -> int:
         LOG.info("Final Execute acknowledged; waiting for automatic reboot")
         await connection.wait_for_reboot(args.reboot_timeout)
     LOG.info("Device disconnected; waiting for version %s", args.expect_version)
-    version = await verify_version(args.address, args.expect_version,
-                                   args.verify_timeout, args.address_type)
+    if package.layout == "host752":
+        version = await verify_version(args.address, args.expect_version, args.verify_timeout, args.address_type,
+            expected_counter=package.release_counter, expected_bytes=len(package.image))
+    else:
+        version = await verify_version(args.address, args.expect_version,
+                                       args.verify_timeout, args.address_type)
     LOG.info("SUCCESS: post-reboot version=%s, elapsed=%.1fs", version, time.monotonic() - started)
     return 0
 

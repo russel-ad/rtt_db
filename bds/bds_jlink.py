@@ -12,7 +12,10 @@ class BDS_Jlink(HardWareBase):
     def __init__(self, err_cb, warn_cb, chip='nRF52840_xxAA', speed=4000,
                  read_size=8192, tag_detect_timeout_s=6.0, read_rtt_data_interval_s=0.002, char_format='asc', **kwargs):
         super().__init__(err_cb, warn_cb, tag_detect_timeout_s, read_rtt_data_interval_s, char_format, **kwargs)
-        self.jlink = pylink.JLink()
+        # Native SEGGER libraries are optional for BLE/serial operation.
+        # Load them only when the user explicitly connects an RTT probe.
+        self.jlink = None
+        self.last_error = ''
         self.speed = speed
         self.chip = chip
         self.rx_timeout = read_rtt_data_interval_s
@@ -33,7 +36,20 @@ class BDS_Jlink(HardWareBase):
             return -1
 
     def hw_open(self, speed=4000, chip='nRF52840_xxAA', reset_flag=True, start_address=None, range_size=0, sn_no=None):
+        self.last_error = ''
         try:
+            if self.jlink is None:
+                try:
+                    self.jlink = pylink.JLink()
+                except Exception as exc:
+                    self.last_error = (
+                        '无法加载 J-Link DLL。使用 RTT 调试时，请安装与本工具位数一致的 '
+                        'SEGGER J-Link Software and Documentation Pack（当前工具为 Windows x64）。\n'
+                        '下载：https://www.segger.com/downloads/jlink/\n'
+                        '仅使用 BLE OTA 或串口功能无需安装 J-Link 软件包。\n'
+                        f'加载详情：{exc}')
+                    self.err_cb(self.last_error)
+                    return False
             self.hw_para_init()
             self.speed = speed
             self.chip = chip
@@ -70,12 +86,13 @@ class BDS_Jlink(HardWareBase):
                 self.last_successful_sn = self.jlink.serial_number
                 return True  # 返回连接成功的标志
         except pylink.errors.JLinkException as e:
+            self.last_error = f'J-Link 连接失败：{e}'
             self.err_cb('J_Link:%s\n' % e)
             print(e)
         return False  # 返回连接失败的标志
 
     def hw_close(self):
-        if self.jlink.opened():
+        if self.jlink is not None and self.jlink.opened():
             try:
                 self.rtt_is_start = False
                 self.jlink.rtt_stop()
@@ -84,15 +101,17 @@ class BDS_Jlink(HardWareBase):
             self.jlink.close()
 
     def get_hw_serial_number(self):
-        if self.jlink.opened():
+        if self.jlink is not None and self.jlink.opened():
             return self.jlink.serial_number
         else:
             return 0
 
     def hw_is_open(self):
-        return self.jlink.opened()
+        return self.jlink is not None and self.jlink.opened()
 
     def hw_write(self, data):
+        if self.jlink is None:
+            raise RuntimeError('请先连接 J-Link，再发送 RTT 数据')
         self.jlink.rtt_write(0, data)
 
     def hw_read(self):

@@ -1,3 +1,7 @@
 bleak==2.1.1
 # The host application already uses PyQt5. Keep a single Qt binding in the EXE.
 PyQt5==5.15.11
+# Match the native workbench's Qt runtime.
+PyQt5-Qt5==5.15.2
+# Application release verification/signing; also bundled in the updater EXE.
+cryptography==46.0.4

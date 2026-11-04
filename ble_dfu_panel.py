@@ -270,7 +270,8 @@ class BleDfuWidget(QWidget):
         scan_row.addWidget(self.scan_btn)
         device_layout.addLayout(scan_row)
         self.filter_input = QLineEdit()
-        self.filter_input.setPlaceholderText("按名称或地址筛选扫描结果")
+        self.filter_input.setPlaceholderText("名称 / MAC 地址（保留未命名 OnMicro 候选）")
+        self.filter_input.setToolTip("名称在扫描响应中，弱信号时可能暂未收到。名称筛选保留未命名 OnMicro 候选；输入 MAC 地址可精确筛选。")
         self.filter_input.textChanged.connect(self.show_devices)
         device_layout.addWidget(self.filter_input)
         rssi_row = QHBoxLayout()
@@ -288,6 +289,10 @@ class BleDfuWidget(QWidget):
         rssi_row.addWidget(self.rssi_input)
         rssi_row.addStretch()
         device_layout.addLayout(rssi_row)
+        self.scan_hint = QLabel()
+        self.scan_hint.setWordWrap(True)
+        self.scan_hint.hide()
+        device_layout.addWidget(self.scan_hint)
         self.device_tree = QTreeWidget()
         self.device_tree.setHeaderLabels(["设备名称", "地址", "信号"])
         self.device_tree.setRootIsDecorated(False)
@@ -328,8 +333,9 @@ class BleDfuWidget(QWidget):
         firmware_layout.addLayout(firmware_row)
         form = QFormLayout()
         self.layout_combo = QComboBox()
-        self.layout_combo.addItem("旧设备首次升级 · 最大 280 KiB", False)
-        self.layout_combo.addItem("已完成分区迁移 · 最大 400 KiB", True)
+        self.layout_combo.addItem("从机 · 原布局 · 最大 280 KiB", False)
+        self.layout_combo.addItem("从机 · 已迁移布局 · 最大 400 KiB", True)
+        self.layout_combo.addItem("主机 SC200-D · 不断电OTA · 752 KiB", "host752")
         self.layout_combo.currentIndexChanged.connect(self.invalidate_package)
         self.version_input = QLineEdit()
         self.version_input.setPlaceholderText("从包内识别，也可手动填写目标版本")
@@ -343,6 +349,7 @@ class BleDfuWidget(QWidget):
         self.package_info.setStyleSheet("background: #f1f6fc; border-radius: 5px; padding: 10px; color: #5a7088;")
         firmware_layout.addWidget(self.package_info)
         self.same_version = QCheckBox("允许重装同版本")
+        self.same_version.setToolTip("显示版本相同时需勾选。主机支持升/同/降计数；设备须已支持回退，旧固件仍可能拒绝。")
         firmware_layout.addWidget(self.same_version)
 
         self.advanced_toggle = QCheckBox("高级传输设置")
@@ -516,21 +523,36 @@ class BleDfuWidget(QWidget):
 
     def show_devices(self, *_):
         keyword = self.filter_input.text().casefold().strip()
+        address_keyword = keyword.replace(":", "").replace("-", "").replace(" ", "")
+        address_search = (bool(keyword) and all(c in "0123456789abcdef:- " for c in keyword)
+                          and (len(address_keyword) >= 4 or ":" in keyword))
         self.device_tree.blockSignals(True)
         self.device_tree.clear()
+        pending_count = 0
         for device in self.devices:
-            if keyword and keyword not in (device["name"] + device["address"]).casefold():
+            name_pending = bool(device.get("name_pending"))
+            matches = keyword in (device["name"] + device["address"]).casefold()
+            if address_search:
+                matches = matches or address_keyword in device["address"].replace(":", "").replace("-", "").casefold()
+            if keyword and not matches and not (name_pending and not address_search):
                 continue
             rssi = device.get("rssi")
             if self.rssi_filter.isChecked() and (rssi is None or rssi < self.rssi_input.value()):
                 continue
             signal_text = f"{rssi} dBm" if rssi is not None else "未知"
-            item = QTreeWidgetItem([device["name"] or "未命名设备", device["address"], signal_text])
+            display = device["name"] or ("未命名 OnMicro 候选" if name_pending else "未命名设备")
+            item = QTreeWidgetItem([display, device["address"], signal_text])
+            if name_pending:
+                pending_count += 1
+                item.setToolTip(0, "已收到 OnMicro/mlink 广播，尚未收到设备名，型号待确认。请按 MAC 地址核对，连接后查询设备身份。")
             item.setData(0, Qt.UserRole, device["address"])
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
             item.setCheckState(0, Qt.Checked if device["address"].upper() in self.checked_devices else Qt.Unchecked)
             self.device_tree.addTopLevelItem(item)
         self.device_tree.blockSignals(False)
+        self.scan_hint.setVisible(bool(self.devices))
+        self.scan_hint.setText(f"本次收到 {len(self.devices)} 台 · 当前显示 {self.device_tree.topLevelItemCount()} 台"
+                               + (f" · {pending_count} 台候选未收到名称，请按地址核对" if pending_count else ""))
         self._refresh()
 
     def on_device_checked(self, item, column):
@@ -598,8 +620,10 @@ class BleDfuWidget(QWidget):
             self.version_input.setText(package.version or "")
             self.package_info.setText(
                 f"✓  校验通过    版本 {package.version or '未识别，请填写目标版本'}\n"
-                f"{len(package.image):,} 字节 / {len(package.image)/1024:.2f} KiB    ·    ROM 0x{package.rom_id:08X}\n"
-                f"CRC16 {package.crc16:04X}    ·    SHA-256 {package.sha256[:20]}…")
+                f"{len(package.image):,} 字节 / {len(package.image)/1024:.2f} KiB\n"
+                + (f"主机 {package.model} · {package.hardware} · 安装计数 {package.release_counter}\n"
+                   if package.layout == "host752" else f"从机 ROM 0x{package.rom_id:08X} · CRC16 {package.crc16:04X}\n")
+                + f"SHA-256 {package.sha256[:20]}…")
             self.set_status("固件检查通过 · 连接设备后可开始升级", "ok")
             self.append_log(f"已检查固件：{Path(path).name}，{len(package.image)} 字节")
         self._refresh()
@@ -760,7 +784,9 @@ class BleDfuWidget(QWidget):
             self.connection_badge.setStyleSheet("color: #168263; font-weight: 600;")
             self.address_input.setText(data["address"])
             self.device_info.setText(f'软件版本：{data.get("software_version") or "未读取"}\n'
-                                     f'ROM ID：{data["rom_id"]}\nMTU / 分片上限：{data.get("mtu", "—")} / {data.get("max_packet_size", "—")}')
+                                     + (f'主机 · 0x409000 · 安装计数 {data["release_counter"]}\n' if data.get("layout") == "host752"
+                                        else f'从机 ROM ID：{data["rom_id"]}\n')
+                                     + f'MTU / 分片上限：{data.get("mtu", "—")} / {data.get("max_packet_size", "—")}')
         elif kind == "disconnected":
             self.connected = False
             self.connection_badge.setText("●  未连接")
@@ -770,6 +796,8 @@ class BleDfuWidget(QWidget):
         elif kind == "environment":
             ok = data["adapter_found"] and data["central_supported"] and data["ble_supported"] and data["bluetooth_on"]
             self.append_log("蓝牙环境正常，可扫描设备。" if ok else f"蓝牙尚未就绪：{data}")
+            if data.get("adapter_name"):
+                self.append_log(f'当前蓝牙适配器：{data["adapter_name"]} · {data.get("adapter_address") or "地址未知"}')
         elif kind == "progress":
             self.progress_bar.setValue(round(data["percent"] * 10))
             self.metrics.setText(f'{data["done"]:,} / {data["total"]:,} 字节    ·    {data["speed"]:.1f} KiB/s    ·    {data["elapsed"]:.1f} s')
@@ -807,7 +835,7 @@ class BleDfuWidget(QWidget):
             elif data["status"] == "cancelled":
                 self.set_status("操作已取消 · 未确认升级成功")
             elif data["action"] == "scan":
-                self.set_status(f"扫描完成 · 发现 {len(self.devices)} 个设备，选择后连接")
+                self.set_status(f"扫描完成 · 收到 {len(self.devices)} 台，当前显示 {self.device_tree.topLevelItemCount()} 台，选择后连接")
             elif data["action"] == "connect":
                 self.set_status("设备已连接 · 可选择固件开始升级", "ok")
             elif data["action"] == "disconnect":

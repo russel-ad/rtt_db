@@ -57,23 +57,44 @@ def get_app_dir():
     return os.path.dirname(os.path.realpath(sys.argv[0]))
 
 def get_config_path():
-    return os.path.join(get_app_dir(), 'config.json')
+    return os.path.join(get_data_dir(), 'config.json')
+
+def get_data_dir():
+    directory = os.environ.get('RTT_DATA_DIR') or get_app_dir()
+    os.makedirs(directory, exist_ok=True)
+    return directory
 
 def get_log_dir():
-    return os.path.join(get_app_dir(), 'aaa_log')
+    return os.path.join(get_data_dir(), 'aaa_log')
 
 def load_config():
     config_path = get_config_path()
     if not os.path.exists(config_path):
-        with open(config_path, 'w', encoding='utf-8') as f:
-            json.dump(DEFAULT_CONFIG, f, indent=4, ensure_ascii=False)
+        # A user may place their previous portable config beside the stable
+        # launcher. Import it once; leave device ledgers and caches in place.
+        legacy = os.path.join(os.environ.get('RTT_UPDATE_ROOT', get_app_dir()), 'config.json')
+        if os.path.abspath(legacy) != os.path.abspath(config_path) and os.path.isfile(legacy):
+            with open(legacy, 'r', encoding='utf-8-sig') as f:
+                save_config(json.load(f))
+        else:
+            save_config(DEFAULT_CONFIG)
     
     with open(config_path, 'r', encoding='utf-8') as f:
         return json.load(f)
 
 def save_config(config):
-    with open(get_config_path(), 'w', encoding='utf-8') as f:
-        json.dump(config, f, indent=4, ensure_ascii=False)
+    import tempfile
+    path = get_config_path()
+    descriptor, temporary = tempfile.mkstemp(prefix='.config-', dir=get_data_dir())
+    try:
+        with os.fdopen(descriptor, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=4, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
 
 def ensure_log_dir():
     log_dir = get_log_dir()

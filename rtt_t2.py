@@ -25,6 +25,9 @@ from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 from PyQt5 import QtCore
 from ble_dfu_panel import BleDfuWidget
+from factory_pair_panel import FactoryPairWidget
+from sc201_workbench.panel import Sc201WorkbenchWidget
+from app_update import APP_VERSION, RESTART_FOR_UPDATE
 
 # 全局变量
 global main_window
@@ -395,7 +398,7 @@ class MainWindow(QMainWindow):
 
     def init_ui(self):
         # 设置窗口属性
-        self.setWindowTitle('RTT调试工具 v2.7.1 · BLE DFU')
+        self.setWindowTitle(f'RTT调试工具 v{APP_VERSION} · SC201 四台并发固件升级')
         self.setGeometry(100, 100, 1200, 800)
 
         # 创建中心部件
@@ -536,18 +539,85 @@ class MainWindow(QMainWindow):
         self.workspace_tabs.addTab(original_workspace, 'RTT / 串口调试')
         self.ble_dfu_page = BleDfuWidget(self, upgrade_guard=self.ble_upgrade_guard)
         self.workspace_tabs.addTab(self.ble_dfu_page, '蓝牙 DFU 升级')
+        self.factory_pair_page = FactoryPairWidget(self, operation_guard=self.factory_pair_guard)
+        self.workspace_tabs.addTab(self.factory_pair_page, '出厂配对')
+        self.sc201_workbench_page = Sc201WorkbenchWidget(
+            self, settings=self.js_cfg, operation_guard=self.sc201_workbench_guard)
+        self.workspace_tabs.addTab(self.sc201_workbench_page, 'SC201 设备工作台')
         self.setCentralWidget(self.workspace_tabs)
         self.ble_dfu_page.closed.connect(self.close)
         self.ble_dfu_page.upgrade_active.connect(self.on_ble_upgrade_active)
+        self.ble_dfu_page.upgrade_active.connect(lambda active: self.factory_pair_page.setEnabled(not active))
+        self.factory_pair_page.closed.connect(self.close)
+        self.factory_pair_page.active_changed.connect(self.on_factory_pair_active)
+        self.sc201_workbench_page.closed.connect(self.close)
+        self.sc201_workbench_page.active_changed.connect(self._refresh_workspace_access)
+        self.workspace_tabs.currentChanged.connect(self._on_workspace_changed)
+        self.ble_dfu_page.bridge.event.connect(self._refresh_workspace_access)
+        self.factory_pair_page.active_changed.connect(self._refresh_workspace_access)
 
         # 启动硬件读取线程
         self.start_hw_thread()
 
     def ble_upgrade_guard(self):
+        workbench = getattr(self, 'sc201_workbench_page', None)
+        if workbench and (workbench.active or self.workspace_tabs.currentWidget() is workbench):
+            return 'SC201 工作台正在使用蓝牙，请先停止操作并断开设备'
+        page = getattr(self, 'factory_pair_page', None)
+        if page and (page.connected or page.busy):
+            return '出厂配对连接正在使用蓝牙，请先断开再升级'
         for job in (self.resource_thread, self.resource_abort_thread):
             if job and job.isRunning():
                 return '资源传输正在进行，请完成后再开始蓝牙升级'
         return None
+
+    def factory_pair_guard(self):
+        workbench = getattr(self, 'sc201_workbench_page', None)
+        if workbench and (workbench.active or self.workspace_tabs.currentWidget() is workbench):
+            return 'SC201 工作台正在使用蓝牙，请先停止操作并断开设备'
+        if self.ble_dfu_page.connected or self.ble_dfu_page.busy:
+            return '请先在蓝牙 DFU 页断开设备并等待操作结束'
+        for job in (self.resource_thread, self.resource_abort_thread):
+            if job and job.isRunning():
+                return '资源传输正在进行，请完成后再操作出厂配对'
+        return None
+
+    def sc201_workbench_guard(self):
+        if self.ble_dfu_page.connected or self.ble_dfu_page.busy:
+            return '请先在蓝牙 DFU 页停止操作并断开设备，再使用 SC201 工作台'
+        if self.factory_pair_page.connected or self.factory_pair_page.busy:
+            return '请先在出厂配对页停止操作并断开设备，再使用 SC201 工作台'
+        for job in (self.resource_thread, self.resource_abort_thread):
+            if job and job.isRunning():
+                return '资源传输正在进行，请完成后再使用 SC201 工作台'
+        return None
+
+    def _on_workspace_changed(self, *_):
+        if self.workspace_tabs.currentWidget() is self.sc201_workbench_page:
+            self.sc201_workbench_page.ensure_loaded()
+        self._refresh_workspace_access()
+
+    def _refresh_workspace_access(self, *_):
+        page = getattr(self, 'sc201_workbench_page', None)
+        if page is None:
+            return
+        reason = self.sc201_workbench_guard()
+        if page.workbench is not None:
+            page.workbench.setEnabled(not bool(reason))
+        reserved = self.workspace_tabs.currentWidget() is page and not reason
+        locked = page.active or reserved
+        self.ble_dfu_page.setEnabled(not locked and not (self.factory_pair_page.connected or self.factory_pair_page.busy))
+        self.factory_pair_page.setEnabled(not locked and not self.ble_dfu_page.upgrading)
+        if locked != getattr(self, '_workbench_controls_locked', False):
+            self._workbench_controls_locked = locked
+            self.on_ble_upgrade_active(locked)
+
+    def on_factory_pair_active(self, active):
+        self.ble_dfu_page.setEnabled(not active)
+        # Use the existing protection for serial resource writes / reset controls.
+        if active != getattr(self, '_factory_pair_active', False):
+            self._factory_pair_active = active
+            self.on_ble_upgrade_active(active)
 
     def on_ble_upgrade_active(self, active):
         # Passive RTT logging remains available during DFU; prevent host-side
@@ -791,7 +861,10 @@ class MainWindow(QMainWindow):
                     else:
                         self.log_text.append("[J_Link LOG] J_Link未复位MCU")
                 else:
-                    QMessageBox.warning(self, "错误", "J_Link连接失败")
+                    message = getattr(self.hw_obj, 'last_error', '') or 'J_Link连接失败'
+                    self.log_text.append('[J_Link ERR] ' + message)
+                    self.status_bar.showMessage('J-Link 未连接；BLE OTA 和串口功能仍可使用')
+                    QMessageBox.warning(self, "J-Link 连接失败", message)
 
             # ===== 串口分支 =====
             else:
@@ -884,13 +957,7 @@ class MainWindow(QMainWindow):
                 self.status_bar.showMessage("时间戳已关闭")
 
             # 保存配置
-            with open('config.json', 'w', encoding='utf-8') as f:
-                json.dump(
-                    self.js_cfg,
-                    f,
-                    indent=4,
-                    ensure_ascii=False
-                )
+            config_manager.save_config(self.js_cfg)
 
         except Exception as e:
             QMessageBox.critical(
@@ -933,8 +1000,7 @@ class MainWindow(QMainWindow):
         dialog = ConfigDialog(self.js_cfg, self)
         if dialog.exec_():
             # 保存配置
-            with open('config.json', 'w') as f:
-                json.dump(self.js_cfg, f, indent=4)
+            config_manager.save_config(self.js_cfg)
             self.status_bar.showMessage("配置已保存")
 
     def on_wave(self):
@@ -1134,8 +1200,7 @@ class MainWindow(QMainWindow):
         self.js_cfg['filter_en'] = (state == Qt.Checked)
 
         # 保存配置
-        with open('config.json', 'w') as f:
-            json.dump(self.js_cfg, f, indent=4)
+        config_manager.save_config(self.js_cfg)
 
     def on_clear_data(self):
         self.log_text.clear()
@@ -1151,17 +1216,46 @@ class MainWindow(QMainWindow):
         # 定期处理日志
         self.log_process()
 
+    def request_update_restart(self):
+        from app_update.qt_client import busy_reason
+        reason = busy_reason(self)
+        if reason:
+            self.status_bar.showMessage('更新等待：' + reason, 5000)
+            return False
+        self._update_restart = True
+        # BLE/factory workspaces close asynchronously and emit closed later.
+        # A rejected first close means waiting, not cancellation of this intent.
+        QApplication.instance().setQuitOnLastWindowClosed(False)
+        self.setEnabled(False)
+        return self.close()
+
     def closeEvent(self, event):
+        if getattr(self, '_update_restart', False):
+            from app_update.qt_client import busy_reason
+            if busy_reason(self):
+                event.ignore()
+                return
+        if not self.sc201_workbench_page.request_shutdown():
+            event.ignore()
+            return
         if not self.ble_dfu_page.request_shutdown():
+            event.ignore()
+            return
+        if not self.factory_pair_page.request_shutdown():
             event.ignore()
             return
         # 清理资源
         if self.hw_obj:
             self.hw_obj.hw_close()
         # 保存配置
-        with open('config.json', 'w') as f:
-            json.dump(self.js_cfg, f, indent=4)
+        config_manager.save_config(self.js_cfg)
+        updater = getattr(self, 'auto_updater', None)
+        if updater:
+            updater.stop()
         event.accept()
+        if getattr(self, '_update_restart', False):
+            QApplication.instance().setQuitOnLastWindowClosed(False)
+            QApplication.instance().exit(RESTART_FOR_UPDATE)
 
 
 # 配置对话框
@@ -1595,8 +1689,20 @@ def main():
     # 显示窗口
     window.show()
 
-    # 启动版本检测线程
-    threading.Thread(target=version_detect_thread, args=(window, 'v2.7.0'), daemon=True).start()
+    from app_update.qt_client import start, startup_health
+    window.auto_updater = start(window)
+    if os.environ.get('RTT_UPDATE_TRIAL') == '1':
+        window.setEnabled(False)
+    def report_startup():
+        try:
+            startup_health(window)
+        except Exception as error:
+            log.exception('Application startup health check failed')
+            if os.environ.get('RTT_UPDATE_TRIAL') == '1':
+                QApplication.instance().exit(1)
+            else:
+                window.status_bar.showMessage('启动检查未通过：' + str(error))
+    QTimer.singleShot(1500, report_startup)
 
     sys.exit(app.exec_())
 

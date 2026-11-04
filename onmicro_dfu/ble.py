@@ -14,6 +14,7 @@ from .package import DfuError
 
 
 SERVICE = "0000fe59-0000-1000-8000-00805f9b34fb"
+MLINK_SERVICE = "6b1a0001-c701-4e11-9a2c-7e5d00a11e55"
 CONTROL = "8ec90001-f315-4f60-9fb8-838830daea50"
 DATA = "8ec90002-f315-4f60-9fb8-838830daea50"
 QUERY = "00000003-0000-1000-8000-00805f9b34fb"
@@ -138,7 +139,7 @@ class BleTransport:
         if self.query_char is None:
             raise DfuError("Missing OnMicro query characteristic 0x0003; ROM ID cannot be verified")
         await asyncio.wait_for(self.client.write_gatt_char(
-            self.query_char, command.encode("ascii"), response=True), self.timeout)
+            self.query_char, command.encode("ascii") if isinstance(command, str) else command, response=True), self.timeout)
         packet = await self.get_packet(self.query_queue, self.timeout)
         if len(packet) != 12:
             raise DfuError(f"Malformed {command} query response: {packet.hex()}")
@@ -153,6 +154,14 @@ class BleTransport:
             LOG.debug("DIS software version unavailable: %s", exc)
             version = None
         address, marker, rom_id = await self.query("ROID")
+        if (address, marker, rom_id) == (0, 0, 0):
+            base, size, counter = await self.query(b"\x00")
+            if base != 0x409000 or not 784 <= size <= 752 * 1024 or not 0 < counter < 0xffffffff:
+                raise DfuError("设备未报告有效的752 KiB主机APP地址、长度和安装计数")
+            return {"address": self.address, "software_version": version,
+                    "rom_id": "未提供（主机DFU）", "execution_address": f"0x{base:08X}",
+                    "boot_marker": None, "layout": "host752", "image_bytes": size,
+                    "release_counter": counter}
         date, type_version, protocol = await self.query("VERN")
         return {"address": self.address, "software_version": version,
                 "rom_id": f"0x{rom_id:08X}", "execution_address": f"0x{address:08X}",
@@ -169,17 +178,25 @@ class BleTransport:
 
 async def scan(timeout: float, name: str | None = None) -> list[dict]:
     _, Scanner = bleak_classes()
-    devices = await Scanner.discover(timeout=timeout, return_adv=True)
+    devices = await Scanner.discover(timeout=timeout, return_adv=True, scanning_mode="active")
     DISCOVERED_DEVICES.clear()
     DISCOVERED_DEVICES.update((device.address.upper(), device) for device, _ in devices.values())
     result = []
     for device, advertisement in devices.values():
         display = advertisement.local_name or device.name or ""
+        services = [uuid.lower() for uuid in advertisement.service_uuids]
+        name_pending = not display and bool({SERVICE, MLINK_SERVICE}.intersection(services))
+        LOG.debug("BLE advertisement: address=%s name=%r rssi=%s services=%s name_pending=%s",
+                  device.address, display, advertisement.rssi, services, name_pending)
         if name and name.casefold() not in display.casefold():
             continue
         result.append({"address": device.address, "name": display,
                        "rssi": advertisement.rssi,
-                       "advertises_dfu": SERVICE in advertisement.service_uuids})
+                       "advertises_dfu": SERVICE in services,
+                       "service_uuids": services, "name_pending": name_pending})
+        if name_pending:
+            LOG.info("收到未命名 OnMicro 候选：%s，RSSI %s dBm；尚未收到设备名，请按地址核对",
+                     device.address, advertisement.rssi)
     return sorted(result, key=lambda item: item["rssi"], reverse=True)
 
 
@@ -190,20 +207,31 @@ async def doctor() -> dict:
     from bleak.backends.winrt.client import BleakClientWinRT
     from bleak.backends.winrt.scanner import BleakScannerWinRT
     from winrt.windows.devices.bluetooth import BluetoothAdapter
+    from winrt.windows.devices.enumeration import DeviceInformation
     from winrt.windows.devices.radios import Radio
     adapter = await BluetoothAdapter.get_default_async()
     radios = await Radio.get_radios_async()
+    adapter_name = None
+    if adapter is not None:
+        try:
+            device = await DeviceInformation.create_from_id_async(adapter.device_id)
+            adapter_name = device.name
+        except Exception:
+            LOG.debug("Cannot read local Bluetooth adapter name", exc_info=True)
     return {"bleak_version": importlib.metadata.version("bleak"),
             "native_client": BleakClientWinRT.__name__,
             "native_scanner": BleakScannerWinRT.__name__,
             "adapter_found": adapter is not None,
+            "adapter_name": adapter_name,
+            "adapter_id": adapter.device_id if adapter else None,
+            "adapter_address": ":".join(f"{b:02X}" for b in adapter.bluetooth_address.to_bytes(6, "big")) if adapter else None,
             "central_supported": bool(adapter and adapter.is_central_role_supported),
             "ble_supported": bool(adapter and adapter.is_low_energy_supported),
             "bluetooth_on": any(int(radio.kind) == 3 and int(radio.state) == 1 for radio in radios)}
 
 
 async def verify_version(address: str, expected: str, timeout: float,
-                         address_type: str = "public") -> str:
+                         address_type: str = "public", *, expected_counter=None, expected_bytes=None) -> str:
     """Retry only read-only reconnects; never retry a firmware write."""
     Client, _ = bleak_classes()
     deadline = time.monotonic() + timeout
@@ -216,6 +244,20 @@ async def verify_version(address: str, expected: str, timeout: float,
                     raw = await client.read_gatt_char(SOFTWARE, use_cached=False)
                     version = bytes(raw).rstrip(b"\0").decode("utf-8", errors="replace")
                     if version == expected:
+                        if expected_counter is not None:
+                            service = client.services.get_service(SERVICE)
+                            characteristic = service.get_characteristic(QUERY) if service else None
+                            if characteristic is None:
+                                raise DfuError("升级后未找到主机安装计数查询特征")
+                            queue = asyncio.Queue()
+                            await client.start_notify(characteristic, lambda _c, data: queue.put_nowait(bytes(data)))
+                            try:
+                                await client.write_gatt_char(characteristic, b"\x00", response=True)
+                                packet = await asyncio.wait_for(queue.get(), 5.0)
+                                if len(packet) != 12 or struct.unpack("<III", packet) != (0x409000, expected_bytes, expected_counter):
+                                    raise DfuError("升级后主机APP地址、长度或安装计数与目标包不一致")
+                            finally:
+                                await client.stop_notify(characteristic)
                         return version
                     last = f"reported version {version!r}, expected {expected!r}"
         except Exception as exc:

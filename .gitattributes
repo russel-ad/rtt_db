@@ -1,0 +1,5 @@
+# Native bridge/runtime files are distributed as verified binaries.
+*.dll binary
+
+# Preserve upstream license bytes: sources.json contains their exact hashes.
+sc201_workbench/licenses/*.txt -text -whitespace

@@ -1,0 +1,7 @@
+{
+  "enabled": true,
+  "feed_url": "https://github.com/russel-ad/rtt_db/releases/latest/download/latest.json",
+  "public_keys": {
+    "5671f277122841d8": "VlESkn6MFfyHz7/0VsG+MqHR+yRs+bbrpG6ZwuBTWMA="
+  }
+}

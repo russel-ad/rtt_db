@@ -82,6 +82,30 @@ class PanelTests(unittest.TestCase):
         self.panel.device_tree.setCurrentItem(self.panel.device_tree.topLevelItem(0))
         self.assertEqual(self.panel.address_input.text(), "AA:BB:CC:DD:EE:FF")
 
+    def test_name_filter_keeps_unnamed_onmicro_candidates_and_address_filter_is_precise(self):
+        self.panel.on_event("devices", [
+            {"name": "", "address": "00:00:30:09:EF:F9", "rssi": -79, "name_pending": True},
+            {"name": "", "address": "00:00:20:06:AF:EB", "rssi": -60, "name_pending": True},
+            {"name": "", "address": "11:22:33:44:55:66", "rssi": -40},
+            {"name": "Motion Mini", "address": "AA:BB:CC:DD:EE:FF", "rssi": -48}])
+        for keyword in ("SC200", "SC200-D"):
+            self.panel.filter_input.setText(keyword)
+            self.assertEqual(self.panel.device_tree.topLevelItemCount(), 2)
+            self.assertIn("2 台候选未收到名称", self.panel.scan_hint.text())
+            self.assertIn("待确认", self.panel.device_tree.topLevelItem(0).toolTip(0))
+        for keyword in ("00:00:30:09:EF:F9", "00-00-30-09-EF-F9", "09EFF9"):
+            self.panel.filter_input.setText(keyword)
+            self.assertEqual(self.panel.device_tree.topLevelItemCount(), 1)
+            item = self.panel.device_tree.topLevelItem(0)
+            self.assertIn("未命名", item.text(0))
+            self.panel.device_tree.setCurrentItem(item)
+            self.assertEqual(self.panel.address_input.text(), "00:00:30:09:EF:F9")
+        self.panel.rssi_filter.setChecked(True)
+        self.assertEqual(self.panel.device_tree.topLevelItemCount(), 0)
+        self.assertIn("当前显示 0 台", self.panel.scan_hint.text())
+        self.panel.rssi_input.setValue(-85)
+        self.assertEqual(self.panel.device_tree.topLevelItemCount(), 1)
+
     def test_upgrade_disables_settings_and_cannot_cancel_commit(self):
         self.panel.load_package(self.path)
         self.connected()
@@ -230,7 +254,9 @@ class IntegrationTests(unittest.TestCase):
                 patch("rtt_t2.BleDfuWidget", side_effect=lambda *args, **kwargs:
                       BleDfuWidget(*args, worker_factory=FakeWorker, **kwargs)):
             window = MainWindow(copy.deepcopy(DEFAULT_CONFIG))
-            self.assertEqual(window.workspace_tabs.count(), 2)
+            self.assertEqual(window.workspace_tabs.count(), 4)
+            self.assertEqual(window.workspace_tabs.tabText(3), "SC201 设备工作台")
+            self.assertEqual(window.workspace_tabs.tabText(2), "出厂配对")
             self.assertEqual(window.workspace_tabs.tabText(1), "蓝牙 DFU 升级")
             self.assertIs(window.workspace_tabs.widget(1), window.ble_dfu_page)
             self.assertIsNotNone(window.log_text)
@@ -244,6 +270,7 @@ class IntegrationTests(unittest.TestCase):
             # Avoid the pre-existing host closeEvent config writer in this test.
             window.ble_dfu_page.closed.disconnect(window.close)
             window.ble_dfu_page._finish_shutdown()
+            window.factory_pair_page.worker.stop()
             window.deleteLater()
             APP.processEvents()
 

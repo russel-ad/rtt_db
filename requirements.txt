@@ -1,0 +1,8 @@
+# Windows x64 / Python 3.11 application dependencies
+-r requirements_ble_dfu.txt
+pyserial==3.5
+pylink-square==2.0.1
+pyqtgraph==0.14.0
+numpy==2.4.2
+requests==2.32.5
+keyboard==0.13.5

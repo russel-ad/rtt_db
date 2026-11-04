@@ -31,7 +31,7 @@ class DfuController:
         self.emit("environment", result)
         return result
 
-    async def scan_devices(self, timeout=8.0):
+    async def scan_devices(self, timeout=12.0):
         devices = await scan(timeout)
         self.emit("devices", devices)
         LOG.info("扫描完成：%d 个设备", len(devices))
@@ -93,10 +93,7 @@ class DfuController:
             raise DfuError("设备未连接，请先连接并查询")
         # Re-query immediately before starting, rather than trusting UI state.
         info = await connection.information()
-        if (info["rom_id"] != f"0x{package.rom_id:08X}" or
-                info["execution_address"] != "0x00404000" or
-                info["boot_marker"] != "0x46533252"):
-            raise DfuError("设备 ROM ID 或启动布局与固件包不匹配")
+        package.validate_device(info)
         if info["software_version"] == target and not allow_same:
             raise DfuError("设备已是目标版本。如需重装，请勾选“允许重装同版本”")
         address = connection.address
@@ -128,7 +125,11 @@ class DfuController:
             self.emit("phase", {"name": "reboot", "critical": True})
             await connection.wait_for_reboot(20.0)
             self.emit("phase", {"name": "verify", "critical": True})
-            version = await verify_version(address, target, 90.0, address_type)
+            if package.layout == "host752":
+                version = await verify_version(address, target, 90.0, address_type,
+                    expected_counter=package.release_counter, expected_bytes=len(package.image))
+            else:
+                version = await verify_version(address, target, 90.0, address_type)
             result = {"address": address, "version": version,
                       "elapsed": time.monotonic() - started}
             self.emit("upgrade_success", result)
