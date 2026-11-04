@@ -138,6 +138,8 @@ def main():
             except Exception as error:
                 details = {'at': datetime.now(timezone.utc).isoformat(),
                     'error_type': type(error).__name__, 'error': str(error), 'hardware_access': False}
+                if hasattr(error, 'attempts'):
+                    details['manifest_attempts'] = error.attempts
                 try:
                     atomic_json(home/'last-repair-error.json', details)
                 except OSError:

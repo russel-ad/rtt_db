@@ -17,8 +17,11 @@ from .core import UpdateError, atomic_json, check_and_stage, read_json
 
 def error_summary(error):
     from .download import DownloadInterrupted
+    from .manifest import ManifestUnavailable
     if isinstance(error, DownloadInterrupted):
         return '下载暂时中断，已保留进度，稍后自动续传'
+    if isinstance(error, ManifestUnavailable):
+        return '更新信息获取失败，各更新入口暂不可用，请查看详情'
     reason = getattr(error, 'reason', error)
     if isinstance(reason, ssl.SSLCertVerificationError):
         return 'HTTPS 证书校验失败，请检查电脑日期和网络'
@@ -200,6 +203,7 @@ class AutoUpdater(QObject):
         dialog.setText(f'当前版本：v{APP_VERSION}\n更新渠道：{channel}\n状态：{self.label.text()}')
         diagnostic = {'current_version': APP_VERSION, 'target_version': self.target_version,
             'feed_url': feed, 'download': self.last_transfer, 'error': self.last_error,
+            'manifest_source': read_json(self.home / 'manifest-source.json', {}),
             'error_log': str(self.home / 'last-check-error.json')}
         dialog.setDetailedText(json.dumps(diagnostic, ensure_ascii=False, indent=2))
         dialog.exec_()
@@ -241,6 +245,8 @@ class AutoUpdater(QObject):
                     'feed_url': self.settings.get('feed_url')}
                 from .download import DownloadInterrupted
                 details['resumable'] = isinstance(error, DownloadInterrupted)
+                if hasattr(error, 'attempts'):
+                    details['manifest_attempts'] = error.attempts
                 try:
                     atomic_json(self.home / 'last-check-error.json', details)
                 except OSError:

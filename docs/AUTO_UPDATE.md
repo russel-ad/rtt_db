@@ -21,6 +21,12 @@ Ed25519 签名、大小和 SHA256 校验后，等待所有设备任务结束及�
 旧版下载器无法完成首次升级时，可使用[独立下载修复工具](UPDATE_DOWNLOAD_REPAIR.md)，
 选择原顶层 `RTTTool.exe`，准备更新后由原启动器完成安装，保留既有配置。
 
+从2.10.4起，正式渠道优先通过 GitHub API Contents 读取 `updates/stable.json` 的 Base64
+内容并验签，不依赖 `raw.githubusercontent.com`。API 不可用时使用原 Release 入口；清单响应
+读取中断也会重试，每个入口最多两次、单次网络超时15秒。签名、版本和包摘要校验保持有效。
+旧基础包中的 `updater.json` 可继续使用，程序会识别既有正式地址并启用 API 入口；显式测试
+渠道不读取正式镜像。更新详情记录成功清单入口，失败日志包含每个入口的实际异常。
+
 启动器独立于 Qt 程序，串行持有当前用户的会话锁；先等待 GUI 退出再切换完整版本目录。
 新版首次启动有45秒健康检查，完成原生组件加载和GUI事件循环检查后才开放试用版界面。
 启动失败自动返回上一版，并记录失败版本，避免重复安装同一坏版本。
@@ -81,5 +87,11 @@ python tools/build_auto_update.py --private-key "$env:LOCALAPPDATA/RTTToolPublis
 基础便携ZIP可同时作为首次安装附件。应用更新ZIP不包含启动器或私钥。
 旧Release及版本包保留；客户端拒绝已见过版本的倒退和同版本替换包。
 清单有效期90天，长期无新版本时应使用同一包摘要重新签发有效清单。
+
+发布顺序：先上传并公开新 Release 的完整附件，确认版本固定地址可用；然后用
+`python tools/sync_update_feed.py --manifest dist/RTTTool_Release_<版本>/latest.json`
+验证并准备 `updates/stable.json`，提交推送该清单；最后将 Release 设为 Latest。
+同步工具拒绝无效签名、镜像倒退和同版本替换，不自动提交或推送。API 与 Release 入口应指向
+相同签名内容，避免部分网络只能访问某个入口时长期停留在旧版本。
 
 签名工具及完整构建命令均不执行上传，也不操作BLE设备或固件。

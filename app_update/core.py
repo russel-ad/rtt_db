@@ -131,15 +131,15 @@ class HttpsRedirect(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(request, fp, code, message, headers, newurl)
 
 
-def fetch(url, *, offset=0, on_retry=lambda attempt: None):
+def fetch(url, *, offset=0, timeout=45, attempts=3, on_retry=lambda attempt: None):
     https_url(url)
     headers = {'User-Agent': 'RTTTool-Updater/1', 'Cache-Control': 'no-cache', 'Accept-Encoding': 'identity'}
     if offset:
         headers['Range'] = 'bytes=' + str(offset) + '-'
     request = urllib.request.Request(url, headers=headers)
-    for attempt in range(3):
+    for attempt in range(attempts):
         try:
-            response = urllib.request.build_opener(HttpsRedirect()).open(request, timeout=45)
+            response = urllib.request.build_opener(HttpsRedirect()).open(request, timeout=timeout)
             try:
                 https_url(response.geturl())
             except Exception:
@@ -150,7 +150,7 @@ def fetch(url, *, offset=0, on_retry=lambda attempt: None):
             if isinstance(error, urllib.error.HTTPError) and error.code not in (429, 500, 502, 503, 504):
                 raise
             reason = getattr(error, 'reason', error)
-            if isinstance(reason, ssl.SSLCertVerificationError) or attempt == 2:
+            if isinstance(reason, ssl.SSLCertVerificationError) or attempt+1 == attempts:
                 raise
             on_retry(attempt + 2)
             time.sleep(attempt + 1)
@@ -196,15 +196,14 @@ def check_and_stage(home, settings, current_version, *, opener=None, progress=la
     custom_opener = opener
     if opener is None:
         def opener(url):
-            return fetch(url, on_retry=lambda attempt: progress('网络连接中断，正在重试（' + str(attempt) + '/3）…'))
+            return fetch(url, timeout=15, attempts=1)
     with file_lock(home / 'download.lock'):
         progress('正在检查上位机更新…')
-        with opener(https_url(settings['feed_url'])) as response:
-            raw = response.read(65537)
-        if len(raw) > 65536:
-            raise UpdateError('Release manifest exceeds 64 KiB')
-        envelope = json.loads(raw)
+        from .manifest import read_manifest
+        envelope, manifest_source = read_manifest(settings, opener=opener, progress=progress)
         payload = verify(envelope, settings['public_keys'])
+        atomic_json(home / 'manifest-source.json', {'url': manifest_source, 'version': payload['version'],
+            'at': datetime.now(timezone.utc).isoformat()})
         seen = read_json(home / 'seen.json', {})
         last = max(version(seen.get('version', current_version)), version(current_version))
         if version(payload['version']) < last:
