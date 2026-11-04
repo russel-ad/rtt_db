@@ -12,5 +12,19 @@ __pycache__/
 *.py[cod]
 aaa_log/
 
+# Per-user workspace settings and generated application data
+.idea/
+.vscode/
+/config.json
+private/
+logs/
+.env
+.env.*
+*.key
+*.p12
+*.pfx
+
 # Dependency manifests must remain versioned despite the generic text rule
 !requirements*.txt
+!sc201_workbench/native/CMakeLists.txt
+!sc201_workbench/licenses/*.txt
