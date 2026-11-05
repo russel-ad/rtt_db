@@ -141,6 +141,22 @@ class NativeWidgetTests(unittest.TestCase):
         finally:
             lock.unlock()
 
+    def test_default_gateway_uses_current_server_without_automatic_login(self):
+        self.widget = self.api.create(self.parent, Path(self.folder.name) / 'workbench')
+        self.assertEqual(self.widget.findChild(QLineEdit, 'serverSystemUrl').text(),
+                         'http://192.168.1.167:20000')
+        self.assertFalse(self.widget.findChild(QCheckBox, 'serverAllowLanHttp').isChecked())
+        self.assertFalse(self.api.state(self.widget)['connected'])
+        self.assertFalse(self.api.state(self.widget)['busy'])
+
+    def test_saved_gateway_is_preserved_across_default_address_change(self):
+        settings = QSettings(QSettings.IniFormat, QSettings.UserScope, 'SC201', 'SC201')
+        settings.setValue('server/gateway', 'https://saved-server.invalid/gateway')
+        settings.sync()
+        self.widget = self.api.create(self.parent, Path(self.folder.name) / 'workbench')
+        self.assertEqual(self.widget.findChild(QLineEdit, 'serverSystemUrl').text(),
+                         'https://saved-server.invalid/gateway')
+
     def test_shutdown_releases_the_original_workbench_lock(self):
         self.widget = self.api.create(self.parent, Path(self.folder.name))
         self.assertTrue(self.api.shutdown(self.widget))

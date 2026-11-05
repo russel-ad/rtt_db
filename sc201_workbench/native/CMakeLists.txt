@@ -71,4 +71,25 @@ if(RTT_WORKBENCH_BUILD_TESTS)
     target_compile_definitions(test_rtt_batch_ota PRIVATE _WIN32_WINNT=0x0A00 WINVER=0x0A00 NOMINMAX)
     target_link_libraries(test_rtt_batch_ota PRIVATE WindowsApp)
   endif()
+  # Reuse the original bounded HTTP mock and canonical credential fixtures.
+  # This links the same security library as the shipped workbench DLL.
+  add_executable(test_rtt_server_backend_trace
+    "${RTT_WORKBENCH_SOURCE}/../../tests_workbench/test_server_backend_trace.cpp"
+    "${RTT_WORKBENCH_SOURCE}/ble_speed.h" "${RTT_WORKBENCH_SOURCE}/ble_speed.cpp"
+    "${RTT_WORKBENCH_SOURCE}/ota_drive.h" "${RTT_WORKBENCH_SOURCE}/ota_drive.cpp"
+    ${session_test_sources})
+  target_include_directories(test_rtt_server_backend_trace PRIVATE
+    "${RTT_WORKBENCH_OVERLAY}" "${SC201_HOST_SOURCE}/src"
+    "${SC201_HOST_SOURCE}/tests" "${RTT_WORKBENCH_SOURCE}")
+  target_compile_definitions(test_rtt_server_backend_trace PRIVATE
+    MLINK_ACCOUNT_VECTORS="${MLINK_ROOT}/test/security/account_vectors.json"
+    MLINK_LEGACY_ACCOUNT_VECTORS="${SC201_HOST_SOURCE}/tests/fixtures/legacy_account_vectors.json"
+    MLINK_BAD_HTTP_IDENTITIES="${SC201_HOST_SOURCE}/tests/fixtures/server_bad_identities.json")
+  target_link_libraries(test_rtt_server_backend_trace PRIVATE sc201_host_workflows Qt5::Bluetooth)
+  if(MSVC)
+    target_compile_options(test_rtt_server_backend_trace PRIVATE /utf-8 /bigobj)
+    target_compile_definitions(test_rtt_server_backend_trace PRIVATE
+      _WIN32_WINNT=0x0A00 WINVER=0x0A00 NOMINMAX)
+    target_link_libraries(test_rtt_server_backend_trace PRIVATE WindowsApp)
+  endif()
 endif()

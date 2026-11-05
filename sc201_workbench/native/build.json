@@ -95,7 +95,14 @@
     "hidden_devices_checked": false,
     "filter_preferences_persisted": true
   },
-  "library_sha256": "7605ef65e7dc10bfbcfb72c79e773065c0ecc9dde3fbaee96ba5f3caf99d75eb",
+  "server_backend": {
+    "optional_envelope_request_id": true,
+    "request_id_max_characters": 256,
+    "credential_validation_unchanged": true,
+    "default_gateway": "http://192.168.1.167:20000",
+    "saved_gateway_preserved": true
+  },
+  "library_sha256": "1f6349aaf0e82bacc7bc3e30e77383c2210be0f65fc58b9e5e9dfd4d88521ffb",
   "integration_inputs_sha256": {
     "batch_ota.cpp": "8a8b32ade48c3e3fe732a20dedb77c82fca011d622af116b1b99023062deda7c",
     "batch_ota.h": "08871e60aedbd515eb63e2aa4b808d37d4f855309d903a2e4074217f198990e4",
@@ -106,15 +113,16 @@
     "ble_speed.cpp": "5f6517183e03a88a0da24db0a7b0b90f44278df52373e84f2ba1d113c3f24bee",
     "ble_speed.h": "2a15a76ade6cde2f0470e178887a7fb8c1b938c93dc44b152adb9d70f058add8",
     "bridge.cpp": "6cf4d836b05c38b44631f9454f85536599ff3c928a8919a14184d3450cc87e04",
-    "CMakeLists.txt": "01459dc7c7cec24071c70f657eed3ac3c9f8bf4bf7b466415f602a99287511f1",
+    "CMakeLists.txt": "2fc932320701139cf9839f94c4621b9c57cd3c073a4e2f145bc81bd44ff99ccc",
     "host_log_adapter.cpp": "d40ab1ae466f6512ba30e0f726eb2be46feff13fef4a9817254af259f5bc6c79",
     "InjectWorkbench.cmake": "05c3460ec59746c8d36df6a9addf902ed1198a82dd2fcc7588150f8fb160a348",
     "ota_att_plan.h": "f1340d355c33a4eab1196d4eb75f0916fbfb38614985fdce78de8d68bba7efcb",
     "ota_drive.cpp": "1e2b4a1241e5c90b83a1fa578fcdb5552f85cdc7c8335f08653135dc4ee94644",
     "ota_drive.h": "554007bf5ddead0d009d2e052ec74989469b0cd5ed9ee37a68847422703efc0e",
     "ota_tuning.h": "94993d0ebdcdd12d82e2bbf318f7b8e8311ac5c780686555a0f3324cfa36e012",
+    "ServerBackendOverlay.cmake": "d6463e9ef9eb43fd1c2962bba3ba7d1e82d332a3c4b506198d7a4a39f16bd56f",
     "SpeedOverlay.cmake": "955071391c84143d9bee5c5099d97a095007c1a0abc6ef43c4662144f92b58e8",
-    "WorkbenchOverlay.cmake": "1405216c0a852fcc08a9ec0dcd700b2db6b6b4e98391de540ebc19b07e441bb8"
+    "WorkbenchOverlay.cmake": "755625af18d67da6d064d5fe0f3c588dda396e477f0f9e56529d72eb77527df7"
   },
   "source_git_head": "26e7eabf6059d27ff2be4e71b245bc6a2a5903d3",
   "mlink_git_head": "a51edfb2093d15e286d6d1efa6db3b93c820c697"

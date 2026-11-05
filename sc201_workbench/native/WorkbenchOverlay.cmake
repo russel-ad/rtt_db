@@ -20,7 +20,11 @@ foreach(name IN LISTS RTT_WORKBENCH_OVERLAY_FILES)
       message(FATAL_ERROR "SecurityPanel operation guard changed; review batch OTA integration")
     endif()
     string(REPLACE "${guard}" "return property(\"rttBatchOtaActive\").toBool() || !m_activeTitle.isEmpty() || m_waitingScan || m_waitingOta ||" contents "${contents}")
+    # Defaults only: preserve explicitly saved URLs and their password binding.
+    string(REPLACE "new QLineEdit(\"http://192.168.1.162:20000\", this)"
+                   "new QLineEdit(\"http://192.168.1.167:20000\", this)" contents "${contents}")
   endif()
   file(WRITE "${RTT_WORKBENCH_OVERLAY}/${name}" "${contents}")
 endforeach()
+include("${RTT_WORKBENCH_SOURCE}/ServerBackendOverlay.cmake")
 include("${RTT_WORKBENCH_SOURCE}/SpeedOverlay.cmake")

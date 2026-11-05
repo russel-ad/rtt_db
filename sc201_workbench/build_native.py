@@ -66,7 +66,7 @@ def main():
          f'-DMLINK_MBEDTLS_SOURCE={(source / "build/deps/mbedtls-3.6.7").as_posix()}'],
         args.build_dir / 'configure.log')
     print('Compiling original UI, workflows and frozen protocol libraries', flush=True)
-    targets = ['sc201_workbench'] + (['test_rtt_batch_ota'] if args.tests else [])
+    targets = ['sc201_workbench'] + (['test_rtt_batch_ota', 'test_rtt_server_backend_trace'] if args.tests else [])
     run([cmake, '--build', str(args.build_dir), '--config', 'Release', '--target', *targets,
          '--parallel', '4'], args.build_dir / 'build.log')
     if before != inputs(source):
@@ -106,6 +106,11 @@ def main():
                 'device_browser': {'rssi_filter': True, 'rssi_filter_default': True,
                                    'rssi_min_dbm_default': -60, 'hidden_devices_checked': False,
                                    'filter_preferences_persisted': True},
+                'server_backend': {'optional_envelope_request_id': True,
+                                   'request_id_max_characters': 256,
+                                   'credential_validation_unchanged': True,
+                                   'default_gateway': 'http://192.168.1.167:20000',
+                                   'saved_gateway_preserved': True},
                 'library_sha256': hashlib.sha256(output.read_bytes()).hexdigest(),
                 'integration_inputs_sha256': {path.relative_to(NATIVE).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
                                              for path in NATIVE.rglob('*') if path.is_file()
