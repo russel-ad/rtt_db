@@ -1,0 +1,9 @@
+flowchart LR
+    A[退出原上位机] --> B[运行新版修复工具]
+    B --> C[选择原顶层 RTTTool.exe]
+    C --> D[获取会话锁并读取原版本]
+    D --> E[获取清单并验签]
+    E --> F[下载或续传并校验完整包]
+    F --> G[写入 pending.json]
+    G --> H[启动原 RTTTool.exe]
+    H --> I[原启动器安装和试运行新版]
