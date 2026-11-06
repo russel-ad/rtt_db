@@ -1,0 +1,6 @@
+{
+  "repository": "git@gitlab.dft.pri:sc201/sc201_host.git",
+  "reference": "origin/master",
+  "commit": "9dbd83bbdc712f2df773b7a74376eb41d4f49855",
+  "libmlink_commit": "a51edfb2093d15e286d6d1efa6db3b93c820c697"
+}

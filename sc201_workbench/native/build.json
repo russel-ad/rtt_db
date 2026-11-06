@@ -1,11 +1,18 @@
 {
-  "source_directory": "E:\\onm\\sc201_host",
+  "source_directory": "G:\\rtt_db\\build\\sc201_host_origin_master_20261106\\source",
   "source_data_directory": "E:\\onm\\sc201_host\\private\\workbench",
+  "upstream_source": {
+    "repository": "git@gitlab.dft.pri:sc201/sc201_host.git",
+    "reference": "origin/master",
+    "commit": "9dbd83bbdc712f2df773b7a74376eb41d4f49855",
+    "libmlink_commit": "a51edfb2093d15e286d6d1efa6db3b93c820c697"
+  },
+  "dependency_source_directory": "E:\\onm\\sc201_host",
   "qt_version": "5.15.2",
   "source_inputs_sha256": {
     "cmake/FrozenMlink.cmake": "d0aa7b5b13b8a3bf96a475ab415c5804a440c280285f2681a0d2babded231598",
     "cmake/HostCrypto.cmake": "9ce1f2b437fde1a5d48ff7cb67eb0ba908e224cb99cb7382d2ac49d96f1dbb67",
-    "CMakeLists.txt": "e3ff150c8e11cd716d0e2892648221120d9d97b181cf2faf0fbb38c2e72aa51e",
+    "CMakeLists.txt": "9aecf86815d7c0c3cf3773d20536cd73b38e38eda66197eba2228a8193ef184b",
     "config/host_tls_config.h": "e931583d43dab656994c63c25d902a822470f2cefcb795b94e9193eddfc7c80d",
     "config/mlink_config.h": "3474a0e91086506c065e34fbc79bf401e5845d30fb461699094aa2105713de69",
     "config/sha256_alt.h": "1045e5a109ca99bba0c9e1e22dfd10754325eee9241409d5ce2de7fcc2bb326e",
@@ -43,7 +50,7 @@
     "src/security/FactoryBackend.h": "ffb4efd777f7c73a75905b971ab9d3c9138f7491fa6b9387550d05b1dc54b840",
     "src/security/PlatformCrypto.cpp": "00d222fb236d68e42759e16af37a120cfa113ebb674b633f0e0470d85b9e5edf",
     "src/security/PlatformCrypto.h": "91fe25fe90d352259c4f9ddd9b55e860d63517c725f94f650b2d2850d6fbb292",
-    "src/security/ServerBackend.cpp": "8185579f21ba0a2cb1454b221e1f53093d5da00c849ab0bbb5c425be2c42db98",
+    "src/security/ServerBackend.cpp": "fef8754fabf7e578633b36055b8fdfb1f67e287900eba1ce2beb28e9f17becf0",
     "src/security/ServerBackend.h": "5e4fe3d0fbc567563968e923b594cec6e2fa2fbc7b918448088b255da739140b",
     "src/security/ServerFactoryBackend.cpp": "92aee558ce18c534391f38f43f6cc3ed63aac341d8956332fdc26e942bee2759",
     "src/security/WorkbenchStore.cpp": "659ecbf6a94c13bb9f97431a47e1e88b8c264ab1185a7a79da42d1847093d4f9",
@@ -60,7 +67,7 @@
     "src/ui/sc201.svg": "0baeb7cff359c242c89e70f362a045da6612dacd60fdd1128bdb0bb1a0bcb5a8",
     "src/workbench.qrc": "6e972718f8a3d0fb2ff6e45ff14aee277375da6964dc050752bc8db863269758",
     "src/workbench.rc": "8be3aa2301a5689c476266e71e915ac95bc71e94dfa231ec76ff4a5c45cf8b7e",
-    "src/workflows/AppController.cpp": "b5ef92d7332ccae714be1181aa2d435ca2d3d6a7ada05777c5be59c662c2e8eb",
+    "src/workflows/AppController.cpp": "603dd273c9b59541d43d56d33281180d31b1cbb1a050baf9c78df3ae7b0e20af",
     "src/workflows/AppController.h": "f5baa874405543b12bf1d9b5fa1a7b1889d90d6e3059791c0664e9f9d3fe17c4",
     "src/workflows/DeviceIdentityController.cpp": "5836fd761787364283db8d519cac6d8fb133485e83c9dd22f25785f0415afef6",
     "src/workflows/DeviceIdentityController.h": "0bf1dc90071084ebfa5cbe81027468043b55dc799db699a4bcbf3f5689fa6b59",
@@ -102,7 +109,12 @@
     "default_gateway": "http://192.168.1.167:20000",
     "saved_gateway_preserved": true
   },
-  "library_sha256": "1f6349aaf0e82bacc7bc3e30e77383c2210be0f65fc58b9e5e9dfd4d88521ffb",
+  "app_connection": {
+    "unassigned_device_code": 11200044,
+    "factory_setup_requires_authenticated_production_state": true,
+    "automatic_provisioning": false
+  },
+  "library_sha256": "879d3efeaf590880a07879fc331e79643e47cd59b3b9658c2eefc4fb11589da8",
   "integration_inputs_sha256": {
     "batch_ota.cpp": "8a8b32ade48c3e3fe732a20dedb77c82fca011d622af116b1b99023062deda7c",
     "batch_ota.h": "08871e60aedbd515eb63e2aa4b808d37d4f855309d903a2e4074217f198990e4",
@@ -124,6 +136,6 @@
     "SpeedOverlay.cmake": "955071391c84143d9bee5c5099d97a095007c1a0abc6ef43c4662144f92b58e8",
     "WorkbenchOverlay.cmake": "755625af18d67da6d064d5fe0f3c588dda396e477f0f9e56529d72eb77527df7"
   },
-  "source_git_head": "26e7eabf6059d27ff2be4e71b245bc6a2a5903d3",
+  "source_git_head": "9dbd83bbdc712f2df773b7a74376eb41d4f49855",
   "mlink_git_head": "a51edfb2093d15e286d6d1efa6db3b93c820c697"
 }

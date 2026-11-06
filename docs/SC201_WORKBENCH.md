@@ -1,6 +1,16 @@
 # RTT 中的 SC201 设备工作台
 
-当前源码版本为 v2.10.6，包含下述工作台功能及[上位机自动更新](AUTO_UPDATE.md)。已用修复后的内置 MediaTek 适配器完成四台一轮验版，从批次活动日志起点到全部验版为 213.236 秒，依赖配套 V001_006 固件和本机环境；验证边界见[修改记录](../CHANGELOG.md)。下面 v2.9.x 的“尚待实测”描述保留其当时的历史范围。
+当前源码版本为 v2.10.7，包含下述工作台功能及[上位机自动更新](AUTO_UPDATE.md)。已用修复后的内置 MediaTek 适配器完成四台一轮验版，从批次活动日志起点到全部验版为 213.236 秒，依赖配套 V001_006 固件和本机环境；验证边界见[修改记录](../CHANGELOG.md)。下面 v2.9.x 的“尚待实测”描述保留其当时的历史范围。
+
+## 2026-11-06：工作区合入上游 master
+
+v2.10.7 的工作台组件接入 `sc201_host` 远端 `origin/master` 提交 `9dbd83bbdc712f2df773b7a74376eb41d4f49855`。来源及组件均重新核对；v2.10.6 及更早发行附件保留原内容。
+
+该提交统一接受登录响应外层的可选 `requestId`，并处理服务端“设备未分配”业务码 `11200044`。连接流程通过已有生产认证核对设备实际状态：未初始化设备进入工厂页，已经初始化的设备仍提示正常绑定。收到业务码不会自动领号、写密钥或认领设备。
+
+RTT 原有的并发升级、RSSI 过滤和自动更新入口继续使用。来源由 `sc201_workbench/source.lock.json` 锁定；`build.json` 记录实际源码哈希和 DLL 摘要。使用独立来源工作树构建，仍沿用 `E:/onm/sc201_host/private/workbench` 作为本机默认资料目录。
+
+本轮验证：DLL 重建通过，Python 工作台集成 21 项、原生并发 OTA 32 项全部通过；响应追踪专项、原后端完整回归及上游 `test_bench_ui --server-ui-only` 通过。后者包含业务码 `11200044` 的已初始化与 EMPTY 设备分流检查，确认该流程不会自动分配 SN、写入或认领。全部测试使用隔离资料、模拟设备和本地 HTTP 替身，未登录真实服务器或操作实机；测试耗时不能用作设备 240 秒验收结果。构建及逐项结果位于 `build/sc201_host_origin_master_20261106/`，未重新执行历史整套 UI 或全部 CTest。
 
 ## v2.10.6：服务器登录与响应追踪号
 
@@ -57,11 +67,17 @@ v2.9.0 在“固件升级”增加多设备并发加密升级，默认同时 2 �
 ## 构建
 
 ```powershell
-python -m sc201_workbench.build_native --source E:/onm/sc201_host
+git -C E:/onm/sc201_host fetch origin
+# 来源目录有本地修改时，创建独立工作树，不覆盖原工作区。
+git -C E:/onm/sc201_host worktree add --detach G:/rtt_db/build/sc201_host_source 9dbd83bbdc712f2df773b7a74376eb41d4f49855
+git -C G:/rtt_db/build/sc201_host_source submodule update --init
+python -m sc201_workbench.build_native --source G:/rtt_db/build/sc201_host_source --dependency-source E:/onm/sc201_host --data-directory E:/onm/sc201_host/private/workbench --tests --upstream-tests
 powershell -NoProfile -ExecutionPolicy Bypass -File ./build_ble_dfu.ps1 -Workbench -Suffix integrated
 ```
 
-原生组件需要原工程配套的精确 libmlink、Mbed TLS、Qt 5.15.2 MSVC x64 SDK 和 VS C++ 工具链。构建脚本从已有构建缓存解析 Qt 位置，也可传 `--qt-dir`；通过附加 CMake 目标复用原工程源码，构建输出保存在 RTT 的 `build` 中。构建前后校验来源文件哈希。
+原生组件需要原工程配套的精确 libmlink、Mbed TLS、Qt 5.15.2 MSVC x64 SDK 和 VS C++ 工具链。构建脚本从依赖工程已有构建缓存解析 Qt 位置，也可传 `--qt-dir`；通过附加 CMake 目标复用来源源码，构建输出保存在 RTT 的 `build` 中。构建前后校验来源文件哈希和提交，提交与来源锁不匹配时拒绝构建，避免重新合入旧版本。来源工作区已经位于锁定提交时可直接传入它。
+
+`--dependency-source` 只提供已有 Mbed TLS、OpenSSL、运行库及许可证缓存，不替代 `--source` 下的产品源码和 libmlink。`--data-directory` 指定默认资料位置，构建和离线测试不会读取或修改该目录的设备台账。`--tests` 和 `--upstream-tests` 构建测试程序，实际执行结果另行记录。
 
 `sc201_workbench/native/build.json` 记录来源提交、实际源文件哈希和组件 SHA256。组件、HTTPS 和 VC 运行库随 RTT EXE 打包；交付不需要安装 Python，不带实机台账、账号凭据或固件。原工程既有内部工厂材料仍属于内部工具范围。
 

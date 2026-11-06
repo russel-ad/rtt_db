@@ -1,6 +1,6 @@
 # RTT 调试工具与 SC201 设备工作台
 
-当前源码版本 **v2.10.6**，适用 Windows x64。集成 RTT／串口调试、原厂 BLE DFU、出厂配对、SC201 设备工作台，以及上位机程序自动更新。
+当前源码版本 **v2.10.7**，适用 Windows x64。集成 RTT／串口调试、原厂 BLE DFU、出厂配对、SC201 设备工作台，以及上位机程序自动更新。
 
 ## 下载与运行
 
@@ -52,7 +52,7 @@ python -m unittest discover -s tests_factory_pair -v
 python -m unittest discover -s tests_ble_dfu -v
 ```
 
-原生批量调度测试的构建入口为 `python -m sc201_workbench.build_native --tests`，依赖外部 SC201 工程。BLE 主机历史夹具用例需要 `ONMICRO_HOST_VALIDATION_DIR`；缺少夹具时显式跳过。
+原生批量调度测试通过 `python -m sc201_workbench.build_native --tests` 构建，来源提交须匹配 `sc201_workbench/source.lock.json`；隔离工作树及依赖参数见[工作台构建说明](docs/SC201_WORKBENCH.md#构建)。BLE 主机历史夹具用例需要 `ONMICRO_HOST_VALIDATION_DIR`；缺少夹具时显式跳过。
 
 ## 文档导航
 
