@@ -17,6 +17,7 @@ EXPANDED_LIMIT = 400 * 1024
 ROM_ID = 0x6626A100
 HOST_LAYOUT = "host752"
 HOST_LIMIT = 752 * 1024
+DISPLAY_VERSION = re.compile(rb"(V[0-9]{3}(?:[_-][0-9A-Za-z]+)*)\x00")
 
 
 class DfuError(Exception):
@@ -79,7 +80,7 @@ class FirmwarePackage:
         hardware = set(re.findall(rb"SC201:HW=([!-~]+)\x00", raw))
         if target not in raw or models != {b"SC200-D"} or hardware != {b"DFT-SC20X-HUB"}:
             raise DfuError("主机包必须包含唯一的SC200-D / DFT-SC20X-HUB完整目标标记")
-        versions = {m.decode("ascii") for m in re.findall(rb"(V[0-9]{3}(?:_[0-9A-Za-z]+)*)\x00", raw)}
+        versions = {m.decode("ascii") for m in DISPLAY_VERSION.findall(raw)}
         if len(versions) != 1:
             raise DfuError("主机包必须包含唯一的显示版本")
         return cls(command, image, 0xa16627, binascii.crc_hqx(image, 0), next(iter(versions)),
@@ -138,8 +139,7 @@ class FirmwarePackage:
         address, marker = struct.unpack_from("<II", image, 36)
         if address != 0x00404000 or marker != 0x46533252:
             raise DfuError("APP is not a normal-boot image linked at 0x00404000")
-        versions = {match.decode("ascii") for match in
-                    re.findall(rb"(V[0-9]{3}(?:_[0-9A-Za-z]+)*)\x00", image)}
+        versions = {match.decode("ascii") for match in DISPLAY_VERSION.findall(image)}
         return cls(command, image, rom_id, crc16,
                    next(iter(versions)) if len(versions) == 1 else None,
                    hashlib.sha256(image).hexdigest())
