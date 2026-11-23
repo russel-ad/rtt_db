@@ -269,6 +269,17 @@ class GuiUpdateTests(unittest.TestCase):
             self.assertIsNotNone(busy_reason(window))
         window.close()
 
+    def test_rtc_capture_and_pending_device_response_block_restart(self):
+        from app_update.qt_client import busy_reason
+        window = self.window()
+        self.addCleanup(window.close)
+        window.rtc_validation_page = SimpleNamespace(active=True, mode='running')
+        self.assertIn('RTC', busy_reason(window))
+        window.rtc_validation_page = SimpleNamespace(active=False, mode='setting')
+        self.assertIn('RTC', busy_reason(window))
+        window.rtc_validation_page.mode = 'idle'
+        self.assertIsNone(busy_reason(window))
+
     def test_auto_restart_requires_a_full_idle_period_after_device_job_finishes(self):
         from app_update.qt_client import AutoUpdater
         with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ,

@@ -62,6 +62,9 @@ def format_bytes(value):
 
 
 def busy_reason(window):
+    rtc = getattr(window, 'rtc_validation_page', None)
+    if rtc and (rtc.active or rtc.mode != 'idle'):
+        return 'RTC 验证仍在采集或等待设备确认'
     page = window.sc201_workbench_page
     state = page.state()
     batch = state.get('batch_ota', {})

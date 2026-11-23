@@ -28,6 +28,7 @@ from ble_dfu_panel import BleDfuWidget
 from factory_pair_panel import FactoryPairWidget
 from sc201_workbench.panel import Sc201WorkbenchWidget
 from app_update import APP_VERSION, RESTART_FOR_UPDATE
+from rtc_validation.panel import RtcValidationWidget
 
 # 全局变量
 global main_window
@@ -544,6 +545,8 @@ class MainWindow(QMainWindow):
         self.sc201_workbench_page = Sc201WorkbenchWidget(
             self, settings=self.js_cfg, operation_guard=self.sc201_workbench_guard)
         self.workspace_tabs.addTab(self.sc201_workbench_page, 'SC201 设备工作台')
+        self.rtc_validation_page = RtcValidationWidget(self, send=self.rtc_send, guard=self.rtc_guard)
+        self.workspace_tabs.addTab(self.rtc_validation_page, 'RTC 验证')
         self.setCentralWidget(self.workspace_tabs)
         self.ble_dfu_page.closed.connect(self.close)
         self.ble_dfu_page.upgrade_active.connect(self.on_ble_upgrade_active)
@@ -559,7 +562,40 @@ class MainWindow(QMainWindow):
         # 启动硬件读取线程
         self.start_hw_thread()
 
+    def rtc_guard(self):
+        if self.js_cfg.get('char_format') == 'hex':
+            return 'RTC 验证需要 ASC 或 UTF-8 接收格式'
+        for page in (self.ble_dfu_page, self.factory_pair_page):
+            if page.connected or page.busy:
+                return '请先结束蓝牙升级或出厂配对连接'
+        if self.sc201_workbench_page.active:
+            return '请先结束设备工作台的连接和操作'
+        if self.resource_needs_abort or any(job and job.isRunning() for job in
+                (self.resource_thread, self.resource_abort_thread)):
+            return '请先完成资源传输及收尾'
+        if not self.hw_obj or not self.hw_obj.hw_is_open():
+            return '请先在 RTT / 串口调试页连接主机'
+        return None
+
+    def rtc_send(self, data):
+        reason = self.rtc_guard()
+        if reason:
+            raise RuntimeError(reason)
+        with thread_lock:
+            hw = self.hw_obj
+            if isinstance(hw, bds_jk.BDS_Jlink):
+                written = hw.jlink.rtt_write(0, list(data))
+            elif isinstance(hw, bds_ser.BDS_Serial):
+                written = hw.ser.write(data)
+            else:
+                raise RuntimeError('不支持的 RTC 连接')
+        if written != len(data):
+            raise RuntimeError('RTC 命令发送不完整，请暂停并重新连接后继续')
+
     def ble_upgrade_guard(self):
+        rtc = getattr(self, 'rtc_validation_page', None)
+        if rtc and rtc.active:
+            return 'RTC 验证正在采集，请先停止并保存报告'
         workbench = getattr(self, 'sc201_workbench_page', None)
         if workbench and (workbench.active or self.workspace_tabs.currentWidget() is workbench):
             return 'SC201 工作台正在使用蓝牙，请先停止操作并断开设备'
@@ -572,6 +608,9 @@ class MainWindow(QMainWindow):
         return None
 
     def factory_pair_guard(self):
+        rtc = getattr(self, 'rtc_validation_page', None)
+        if rtc and rtc.active:
+            return 'RTC 验证正在采集，请先停止并保存报告'
         workbench = getattr(self, 'sc201_workbench_page', None)
         if workbench and (workbench.active or self.workspace_tabs.currentWidget() is workbench):
             return 'SC201 工作台正在使用蓝牙，请先停止操作并断开设备'
@@ -583,6 +622,9 @@ class MainWindow(QMainWindow):
         return None
 
     def sc201_workbench_guard(self):
+        rtc = getattr(self, 'rtc_validation_page', None)
+        if rtc and rtc.active:
+            return 'RTC 验证正在采集，请先停止并保存报告'
         if self.ble_dfu_page.connected or self.ble_dfu_page.busy:
             return '请先在蓝牙 DFU 页停止操作并断开设备，再使用 SC201 工作台'
         if self.factory_pair_page.connected or self.factory_pair_page.busy:
@@ -671,6 +713,7 @@ class MainWindow(QMainWindow):
         self.hw_obj.read_data_queue(raw_log)
         for chunk in raw_log:
             self.feed_resource_messages(chunk)
+            self.rtc_validation_page.feed(chunk)
         if not raw_log and not self.log_remain_str:
             return
 
@@ -834,6 +877,8 @@ class MainWindow(QMainWindow):
 
                 # 新连接
                 jk_con_reset = self.js_cfg.get('jk_con_reset', False)
+                if self.rtc_validation_page.active or self.workspace_tabs.currentWidget() is self.rtc_validation_page:
+                    jk_con_reset = False  # Preserve the current RTC test boot.
                 jk_speed = int(self.js_cfg.get('jk_speed', 4000))
                 chip = self.js_cfg['jk_chip'][0]
                 start_address = None
@@ -996,6 +1041,9 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "错误", str(e))
 
     def on_config(self):
+        if self.rtc_validation_page.active:
+            QMessageBox.information(self, 'RTC 验证', '请先停止 RTC 采集并保存报告')
+            return
         # 打开配置对话框
         dialog = ConfigDialog(self.js_cfg, self)
         if dialog.exec_():
@@ -1056,6 +1104,9 @@ class MainWindow(QMainWindow):
             self.js_cfg['resource_path'] = path
 
     def on_resource_send(self):
+        if self.rtc_validation_page.active:
+            QMessageBox.information(self, 'RTC 验证', '请先停止 RTC 采集并保存报告')
+            return
         if self.resource_needs_abort or (self.resource_abort_thread and
                                          self.resource_abort_thread.isRunning()):
             return
@@ -1140,6 +1191,9 @@ class MainWindow(QMainWindow):
             self.log_text.append('[RESOURCE WARN] ' + message)
 
     def on_send_data(self):
+        if self.rtc_validation_page.active:
+            QMessageBox.information(self, 'RTC 验证', '请先停止 RTC 采集并保存报告')
+            return
         if not self.hw_obj or not self.hw_obj.hw_is_open():
             QMessageBox.warning(self, "警告", "请先连接硬件！")
             return
@@ -1230,6 +1284,9 @@ class MainWindow(QMainWindow):
         return self.close()
 
     def closeEvent(self, event):
+        if not self.rtc_validation_page.request_shutdown():
+            event.ignore()
+            return
         if getattr(self, '_update_restart', False):
             from app_update.qt_client import busy_reason
             if busy_reason(self):
