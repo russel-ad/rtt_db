@@ -2,16 +2,16 @@
   "payload": {
     "schema": 1,
     "app_id": "rtt-sc201-workbench",
-    "version": "2.10.8",
+    "version": "2.10.9",
     "platform": "windows-x64",
-    "url": "https://github.com/russel-ad/rtt_db/releases/download/v2.10.8/RTTTool-2.10.8-windows-x64.zip",
-    "size": 87042485,
-    "sha256": "14ca1563cb2d236612ec902c272ef3d8bc8bca112928f2216692002e1d3dd865",
+    "url": "https://github.com/russel-ad/rtt_db/releases/download/v2.10.9/RTTTool-2.10.9-windows-x64.zip",
+    "size": 87069282,
+    "sha256": "7af9372b8ef53283a2350f8c993ebc1927856b34946cc79b25621c074b7debac",
     "entry": "RTTToolApp.exe",
     "min_launcher": 1,
-    "published_at": "2026-11-14T09:13:33.431438+00:00",
-    "expires_at": "2027-02-12T09:13:33.431438+00:00"
+    "published_at": "2026-11-23T11:01:57.153601+00:00",
+    "expires_at": "2027-02-21T11:01:57.153601+00:00"
   },
   "key_id": "5671f277122841d8",
-  "signature": "ZxEg+op/JrQmf1hkLCmPaEUzljt+6brpwVdM4mt3wu5W1JfWWbP8OSAEhOgDZhA5D/5k3s4EnLz9tTzxXerYBQ=="
+  "signature": "hSJxHXKirM9+/BnTnv8IFltTlCEJklrmhaxID84UYftd1kp0QMhkmcAHPkCbIC+cz2CI01IU1C0I4eOZJHqQBA=="
 }
