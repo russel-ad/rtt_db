@@ -32,6 +32,7 @@ def self_test():
     parser.add_argument("--width", type=int, default=1380)
     parser.add_argument("--height", type=int, default=1040)
     parser.add_argument("--without-jlink-dll", action="store_true")
+    parser.add_argument("--uart-preview", action="store_true")
     parser.add_argument("--app-update-preview", action="store_true")
     args = parser.parse_args()
 
@@ -52,6 +53,8 @@ def self_test():
     window.setAttribute(Qt.WA_DontShowOnScreen, True)
     window.resize(args.width, args.height)
     window.workspace_tabs.setCurrentIndex(1)
+    if args.uart_preview:
+        window.workspace_tabs.setCurrentWidget(window.uart_validation_page)
     if args.workbench_preview or args.workbench_firmware_preview:
         from PyQt5.QtCore import QSettings
         data_dir = (args.workbench_data_dir or args.ui_self_test.parent / 'workbench_test_data').resolve()
@@ -140,6 +143,11 @@ def self_test():
     report["concurrency"] = window.ble_dfu_page.concurrency_input.value()
     report["batch_preview_simulated"] = args.batch_preview
     report["factory_preview_simulated"] = args.factory_preview
+    if args.uart_preview:
+        page = window.uart_validation_page
+        report['uart_validation'] = {'visible': page.isVisible(), 'profiles': [
+            page.profile.itemText(i) for i in range(page.profile.count())],
+            'start_enabled_without_probes': page.start.isEnabled(), 'probe_opened': page.active}
     if update_preview:
         from app_update.tls import create_context, diagnostics
         from app_update import APP_VERSION

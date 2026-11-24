@@ -83,6 +83,8 @@ try {
         }
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'docs/PORTABLE_START.md') `
             -Destination (Join-Path $appFolder 'PORTABLE_START.md') -Force
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'docs/UART_VALIDATION.md') `
+            -Destination (Join-Path $appFolder 'UART_VALIDATION.md') -Force
         $zipPath = "$deliveryFolder.zip"
         # Use shared file reads; Compress-Archive may fail while a scanner is
         # inspecting a freshly built dependency such as base_library.zip.

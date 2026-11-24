@@ -29,6 +29,7 @@ from factory_pair_panel import FactoryPairWidget
 from sc201_workbench.panel import Sc201WorkbenchWidget
 from app_update import APP_VERSION, RESTART_FOR_UPDATE
 from rtc_validation.panel import RtcValidationWidget
+from uart_validation.panel import UartValidationWidget
 
 # 全局变量
 global main_window
@@ -547,6 +548,10 @@ class MainWindow(QMainWindow):
         self.workspace_tabs.addTab(self.sc201_workbench_page, 'SC201 设备工作台')
         self.rtc_validation_page = RtcValidationWidget(self, send=self.rtc_send, guard=self.rtc_guard)
         self.workspace_tabs.addTab(self.rtc_validation_page, 'RTC 验证')
+        self.uart_validation_page = UartValidationWidget(
+            self, settings=self.js_cfg, directory=lambda: os.path.join(config_manager.get_log_dir(), 'uart_validation'),
+            guard=self.uart_validation_guard)
+        self.workspace_tabs.addTab(self.uart_validation_page, 'UART 通信测试')
         self.setCentralWidget(self.workspace_tabs)
         self.ble_dfu_page.closed.connect(self.close)
         self.ble_dfu_page.upgrade_active.connect(self.on_ble_upgrade_active)
@@ -558,11 +563,14 @@ class MainWindow(QMainWindow):
         self.workspace_tabs.currentChanged.connect(self._on_workspace_changed)
         self.ble_dfu_page.bridge.event.connect(self._refresh_workspace_access)
         self.factory_pair_page.active_changed.connect(self._refresh_workspace_access)
+        self.uart_validation_page.active_changed.connect(self._refresh_workspace_access)
 
         # 启动硬件读取线程
         self.start_hw_thread()
 
     def rtc_guard(self):
+        if self.uart_validation_active():
+            return 'UART 通信测试正在使用探针'
         if self.js_cfg.get('char_format') == 'hex':
             return 'RTC 验证需要 ASC 或 UTF-8 接收格式'
         for page in (self.ble_dfu_page, self.factory_pair_page):
@@ -593,6 +601,8 @@ class MainWindow(QMainWindow):
             raise RuntimeError('RTC 命令发送不完整，请暂停并重新连接后继续')
 
     def ble_upgrade_guard(self):
+        if self.uart_validation_active():
+            return '请先结束 UART 通信测试再升级'
         rtc = getattr(self, 'rtc_validation_page', None)
         if rtc and rtc.active:
             return 'RTC 验证正在采集，请先停止并保存报告'
@@ -608,6 +618,8 @@ class MainWindow(QMainWindow):
         return None
 
     def factory_pair_guard(self):
+        if self.uart_validation_active():
+            return '请先结束 UART 通信测试再操作出厂配对'
         rtc = getattr(self, 'rtc_validation_page', None)
         if rtc and rtc.active:
             return 'RTC 验证正在采集，请先停止并保存报告'
@@ -622,6 +634,8 @@ class MainWindow(QMainWindow):
         return None
 
     def sc201_workbench_guard(self):
+        if self.uart_validation_active():
+            return '请先结束 UART 通信测试再使用 SC201 工作台'
         rtc = getattr(self, 'rtc_validation_page', None)
         if rtc and rtc.active:
             return 'RTC 验证正在采集，请先停止并保存报告'
@@ -632,6 +646,25 @@ class MainWindow(QMainWindow):
         for job in (self.resource_thread, self.resource_abort_thread):
             if job and job.isRunning():
                 return '资源传输正在进行，请完成后再使用 SC201 工作台'
+        return None
+
+    def uart_validation_active(self):
+        page = getattr(self, 'uart_validation_page', None)
+        return bool(page and page.active)
+
+    def uart_validation_guard(self):
+        if self.hw_obj and self.hw_obj.hw_is_open():
+            return '请先断开「RTT / 串口调试」页中的连接'
+        rtc = self.rtc_validation_page
+        if rtc.active or rtc.mode != 'idle':
+            return '请先结束 RTC 验证并保存报告'
+        if self.ble_dfu_page.connected or self.ble_dfu_page.busy:
+            return '请先完成蓝牙升级并断开连接'
+        if self.factory_pair_page.connected or self.factory_pair_page.busy or self.sc201_workbench_page.active:
+            return '请先结束出厂配对或设备工作台的连接和操作'
+        if self.resource_needs_abort or any(job and job.isRunning() for job in
+                (self.resource_thread, self.resource_abort_thread)):
+            return '请先完成资源传输及收尾'
         return None
 
     def _on_workspace_changed(self, *_):
@@ -647,7 +680,7 @@ class MainWindow(QMainWindow):
         if page.workbench is not None:
             page.workbench.setEnabled(not bool(reason))
         reserved = self.workspace_tabs.currentWidget() is page and not reason
-        locked = page.active or reserved
+        locked = page.active or reserved or self.uart_validation_active()
         self.ble_dfu_page.setEnabled(not locked and not (self.factory_pair_page.connected or self.factory_pair_page.busy))
         self.factory_pair_page.setEnabled(not locked and not self.ble_dfu_page.upgrading)
         if locked != getattr(self, '_workbench_controls_locked', False):
@@ -826,6 +859,9 @@ class MainWindow(QMainWindow):
         """
         支持 J-Link/串口 连接/断开，自动切换硬件对象
         """
+        if self.uart_validation_active():
+            self.status_bar.showMessage('UART 通信测试正在使用探针')
+            return
         print(f"hw_sel = {self.js_cfg.get('hw_sel', '1')}")
         print(f"hw_obj type = {type(self.hw_obj)}")
         try:
@@ -1284,6 +1320,11 @@ class MainWindow(QMainWindow):
         return self.close()
 
     def closeEvent(self, event):
+        if self.uart_validation_active():
+            self.workspace_tabs.setCurrentWidget(self.uart_validation_page)
+            self.status_bar.showMessage('请等待 UART 通信测试结束，或点击「停止并保存」')
+            event.ignore()
+            return
         if not self.rtc_validation_page.request_shutdown():
             event.ignore()
             return

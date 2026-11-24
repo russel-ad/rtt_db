@@ -82,7 +82,7 @@ class JlinkOptionalTests(unittest.TestCase):
                 self.assertEqual(len(windows), 1)
                 self.assertIsInstance(windows[0].hw_obj, BDS_Jlink)
                 self.assertIsNone(windows[0].hw_obj.jlink)
-                self.assertEqual(windows[0].workspace_tabs.count(), 5)
+                self.assertEqual(windows[0].workspace_tabs.count(), 6)
             finally:
                 for window in windows:
                     window.ble_dfu_page.closed.disconnect(window.close)

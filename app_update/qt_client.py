@@ -62,6 +62,9 @@ def format_bytes(value):
 
 
 def busy_reason(window):
+    uart = getattr(window, 'uart_validation_page', None)
+    if uart and uart.active:
+        return 'UART 通信测试正在使用探针或保存报告'
     rtc = getattr(window, 'rtc_validation_page', None)
     if rtc and (rtc.active or rtc.mode != 'idle'):
         return 'RTC 验证仍在采集或等待设备确认'
