@@ -2,7 +2,7 @@
 
 ## 1. 首次准备
 
-1. 解压 `RTTTool_UART_20261124_windows_x64.zip`，运行里面的 `rtt_t2_sc201_workbench_portable_uart_validation_20261124.exe`。电脑首次使用此工装时，先安装 Windows x64 J-Link 软件包。
+1. 从项目内网交付获取并解压 `RTTTool_UART_20261124_windows_x64.zip`，运行里面的 `rtt_t2_sc201_workbench_portable_uart_validation_20261124.exe`。电脑首次使用此工装时，先安装 Windows x64 J-Link 软件包。
 2. 在上位机「蓝牙 DFU 升级」页分别直连并升级两端。选择项目内网交付的对应固件 ZIP。两端验版均为 `V001-008-UART1`，主机包文件名带 **R3**。升级完成后断开蓝牙升级连接。
 
    | 设备 | 升级页目标 | 测试固件 |
