@@ -1,7 +1,7 @@
 """Update verification, bounded downloads and side-by-side installation.
 
-Only the launcher changes current.json, while holding its session lock after
-the GUI has exited. The GUI downloads and atomically publishes pending.json.
+Only the launcher changes current.json, while holding an exclusive session lock
+with no other GUI running. GUIs download and atomically publish pending.json.
 """
 from __future__ import annotations
 
@@ -32,6 +32,10 @@ MAX_FILES = 30000
 
 
 class UpdateError(RuntimeError):
+    pass
+
+
+class LockBusy(UpdateError):
     pass
 
 
@@ -91,29 +95,68 @@ def switch_directory(staging, target):
 
 
 @contextmanager
-def file_lock(path):
+def file_lock(path, *, shared=False, timeout=0):
     """A process-owned lock; never infer exclusivity from a PID or lock file."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open('a+b') as stream:
-        if stream.tell() == 0:
-            stream.write(b'0')
-            stream.flush()
-        stream.seek(0)
-        try:
+        # Windows permits locking beyond EOF. Do not write a byte while another
+        # reader holds the lock (including the legacy CRT lock on byte zero).
+        if os.name == 'nt':
+            import ctypes
+            from ctypes import wintypes
+            import msvcrt
+            class Overlapped(ctypes.Structure):
+                _fields_ = [('Internal', ctypes.c_size_t), ('InternalHigh', ctypes.c_size_t),
+                            ('Offset', wintypes.DWORD), ('OffsetHigh', wintypes.DWORD),
+                            ('hEvent', wintypes.HANDLE)]
+            kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+            kernel.LockFileEx.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD,
+                                         wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(Overlapped)]
+            kernel.LockFileEx.restype = wintypes.BOOL
+            kernel.UnlockFileEx.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD,
+                                           wintypes.DWORD, ctypes.POINTER(Overlapped)]
+            kernel.UnlockFileEx.restype = wintypes.BOOL
+            handle = msvcrt.get_osfhandle(stream.fileno())
+            overlapped = Overlapped()
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                if os.name == 'nt':
+                    if not kernel.LockFileEx(handle, 1 if shared else 3, 0, 1, 0, ctypes.byref(overlapped)):
+                        raise ctypes.WinError(ctypes.get_last_error())
+                else:
+                    import fcntl
+                    fcntl.flock(stream, (fcntl.LOCK_SH if shared else fcntl.LOCK_EX) | fcntl.LOCK_NB)
+                break
+            except OSError as error:
+                import errno
+                if (getattr(error, 'winerror', None) != 33 if os.name == 'nt'
+                        else error.errno not in (errno.EACCES, errno.EAGAIN)):
+                    raise
+                if time.monotonic() >= deadline:
+                    raise LockBusy('Another application/update session is running') from error
+                time.sleep(0.1)
+        def downgrade():
+            nonlocal shared
+            if shared:
+                return
             if os.name == 'nt':
-                import msvcrt
-                msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+                # Same-handle overlap is supported by LockFileEx. First unlock
+                # releases the exclusive lock, leaving the shared lock intact.
+                if not kernel.LockFileEx(handle, 1, 0, 1, 0, ctypes.byref(overlapped)):
+                    raise ctypes.WinError(ctypes.get_last_error())
+                if not kernel.UnlockFileEx(handle, 0, 1, 0, ctypes.byref(overlapped)):
+                    raise ctypes.WinError(ctypes.get_last_error())
             else:
-                import fcntl
-                fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError as error:
-            raise UpdateError('Another application/update session is running') from error
+                fcntl.flock(stream, fcntl.LOCK_SH)
+            shared = True
         try:
-            yield
+            from types import SimpleNamespace
+            yield SimpleNamespace(downgrade=downgrade)
         finally:
-            stream.seek(0)
             if os.name == 'nt':
-                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+                if not kernel.UnlockFileEx(handle, 0, 1, 0, ctypes.byref(overlapped)):
+                    raise ctypes.WinError(ctypes.get_last_error())
             else:
                 fcntl.flock(stream, fcntl.LOCK_UN)
 

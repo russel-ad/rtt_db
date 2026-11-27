@@ -238,6 +238,36 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(spawn.call_count, 2)
         self.assertEqual(read_json(self.home/'current.json')['current'], '2.10.0')
 
+    def test_pending_update_waits_for_all_windows_then_health_checks(self):
+        from app_update.launcher import run_application
+        bundle = self.root/'bundle'
+        initial = bundle/'app/2.10.0'
+        initial.mkdir(parents=True)
+        (initial/APP_ENTRY).write_bytes(b'initial')
+        owner = self
+        versions = []
+        class Child:
+            def __init__(self, args, **kwargs):
+                self.env = kwargs['env']
+                versions.append(self.env['RTT_UPDATE_VERSION'])
+                if self.env['RTT_UPDATE_TRIAL'] == '1':
+                    atomic_json(Path(self.env['RTT_UPDATE_HEALTH']),
+                        {'version':self.env['RTT_UPDATE_VERSION'],'nonce':self.env['RTT_UPDATE_NONCE']})
+            def poll(self):
+                return None
+            def wait(self, **kwargs):
+                if len(versions) == 1:
+                    owner.stage()
+                    run_application(bundle,owner.home,owner.settings,bundled_version='2.10.0')
+                    owner.assertTrue((owner.home/'pending.json').exists())
+                    owner.assertEqual(read_json(owner.home/'current.json')['current'],'2.10.0')
+                return 0
+        with patch('app_update.launcher.subprocess.Popen',side_effect=Child):
+            run_application(bundle,self.home,self.settings,bundled_version='2.10.0')
+            run_application(bundle,self.home,self.settings,bundled_version='2.10.0')
+        self.assertEqual(versions,['2.10.0','2.10.0','2.10.1'])
+        self.assertFalse(read_json(self.home/'current.json')['trial'])
+
 
 class GuiUpdateTests(unittest.TestCase):
     @classmethod

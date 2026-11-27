@@ -32,18 +32,10 @@ def main():
         raise RuntimeError('Preserve the previous base distribution; choose a new version')
     settings = ROOT / 'app_update/release_config.json'
     assert settings.is_file(), 'Run the publisher keygen once before building'
-    command = ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(ROOT/'build_ble_dfu.ps1'),
-               '-Workbench', '-OneDir', '-Suffix', args.suffix]
-    with (proof/'application-build.log').open('wb') as log:
-        result = subprocess.run(command, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
-    # The script's Python ZIP check is authoritative even if a shell wrapper
-    # reports a nonzero status after native diagnostics on stderr.
-    app_folder = ROOT/'dist'/('sc201_workbench_portable_' + args.suffix)/('rtt_t2_sc201_workbench_portable_' + args.suffix)
-    source_exe = app_folder / ('rtt_t2_sc201_workbench_portable_' + args.suffix + '.exe')
-    if not source_exe.is_file():
-        raise RuntimeError('Application build failed; inspect application-build.log')
     launcher_dist = proof / 'launcher-dist'
+    runtime_name = '_launcher_' + APP_VERSION.replace('.', '_')
     command = [sys.executable, '-m', 'PyInstaller', '--noconfirm', '--onedir', '--windowed',
+               '--contents-directory', runtime_name,
                '--name', 'RTTTool', '--icon', str(ROOT/'tool.ico'), '--exclude-module', 'PyQt5',
                '--exclude-module', 'PySide6', '--exclude-module', 'numpy',
                '--collect-data', 'certifi', '--hidden-import', 'truststore._windows',
@@ -52,10 +44,24 @@ def main():
                '--specpath', str(proof), str(ROOT/'rtt_update_launcher.py')]
     with (proof/'launcher-build.log').open('wb') as log:
         subprocess.run(command, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, check=True)
+    launcher = launcher_dist/'RTTTool'
+    atomic_json(launcher/'bootstrap-files.json', dict(revision=2, runtime=runtime_name,
+        files={p.relative_to(launcher).as_posix(): digest(p) for p in sorted(launcher.rglob('*')) if p.is_file()}))
+    command = ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(ROOT/'build_ble_dfu.ps1'),
+               '-Workbench', '-OneDir', '-Suffix', args.suffix]
+    with (proof/'application-build.log').open('wb') as log:
+        result = subprocess.run(command, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
+    app_folder = ROOT/'dist'/('sc201_workbench_portable_' + args.suffix)/('rtt_t2_sc201_workbench_portable_' + args.suffix)
+    source_exe = app_folder / ('rtt_t2_sc201_workbench_portable_' + args.suffix + '.exe')
+    if result.returncode or not source_exe.is_file():
+        raise RuntimeError('Application build failed; inspect application-build.log')
     shutil.copytree(launcher_dist/'RTTTool', base)
     installed = base/'app'/APP_VERSION
     shutil.copytree(app_folder, installed)
     (installed/source_exe.name).rename(installed/APP_ENTRY)
+    # App-only updates must carry the bootstrap migration too: old top-level
+    # launchers otherwise retain their single-instance lock indefinitely.
+    shutil.copytree(launcher, installed/'bootstrap')
     atomic_json(installed/'app-release.json', {'app_id': APP_ID, 'version': APP_VERSION, 'entry': APP_ENTRY})
     shutil.copyfile(settings, base/'updater.json')
     shutil.copyfile(ROOT/'docs/AUTO_UPDATE.md', base/'AUTO_UPDATE.md')

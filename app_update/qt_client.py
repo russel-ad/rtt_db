@@ -62,6 +62,12 @@ def format_bytes(value):
 
 
 def busy_reason(window):
+    session = os.environ.get('RTT_UPDATE_SESSION')
+    home = os.environ.get('RTT_UPDATE_HOME')
+    if session and home:
+        from .sessions import other_instances
+        if other_instances(Path(home), session):
+            return '其他上位机窗口仍在运行，请关闭其他窗口后更新'
     uart = getattr(window, 'uart_validation_page', None)
     if uart and uart.active:
         return 'UART 通信测试正在使用探针或保存报告'
@@ -113,6 +119,8 @@ class AutoUpdater(QObject):
         self.last_error = None
         self.last_transfer = None
         self.target_version = None
+        from .bootstrap import migration_needed
+        self.bootstrap_pending = migration_needed()
         self.panel = QWidget(window.status_bar)
         self.panel.setObjectName('appUpdateStatus')
         layout = QHBoxLayout(self.panel)
@@ -282,7 +290,7 @@ class AutoUpdater(QObject):
         if self.closing:
             return
         now = time.monotonic()
-        if not self.pending:
+        if not self.pending and not self.bootstrap_pending:
             # Reconnect recovery without a resident service or a busy retry loop.
             if now - self.last_check >= 300:
                 self.check()
@@ -291,18 +299,26 @@ class AutoUpdater(QObject):
         self.restart.setEnabled(not bool(reason))
         if reason:
             self.idle_since = None
-            self.set_status('新版 v' + self.pending['version'] + ' 已就绪 · 等待当前任务结束')
+            self.set_status('更新已就绪 · ' + reason)
             return
         if self.idle_since is None:
             self.idle_since = now
         remaining = max(0, 60 - int(now - max(self.last_input, self.idle_since)))
-        self.set_status('新版 v' + self.pending['version'] + f' 已就绪 · 空闲 {remaining} 秒后重启')
+        target = ('新版 v' + self.pending['version']) if self.pending else '多窗口启动器'
+        self.set_status(target + f' 已就绪 · 空闲 {remaining} 秒后重启')
         if remaining == 0:
             self.window.request_update_restart()
 
     def stop(self):
         self.closing = True
         self.timer.stop()
+        from .bootstrap import schedule_migration
+        try:
+            return schedule_migration(self.root, self.home,
+                                      restart=bool(getattr(self.window, '_update_restart', False)))
+        except OSError as error:
+            atomic_json(self.home / 'bootstrap-result.json', {'installed': False, 'error': str(error)})
+            return False
 
 
 def start(window):

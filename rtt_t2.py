@@ -1348,12 +1348,13 @@ class MainWindow(QMainWindow):
         # 保存配置
         config_manager.save_config(self.js_cfg)
         updater = getattr(self, 'auto_updater', None)
+        bootstrap_restart = False
         if updater:
-            updater.stop()
+            bootstrap_restart = updater.stop()
         event.accept()
         if getattr(self, '_update_restart', False):
             QApplication.instance().setQuitOnLastWindowClosed(False)
-            QApplication.instance().exit(RESTART_FOR_UPDATE)
+            QApplication.instance().exit(0 if bootstrap_restart else RESTART_FOR_UPDATE)
 
 
 # 配置对话框
