@@ -1,3 +1,5 @@
+import logging
+
 import pylink
 from bds.hw_base import HardWareBase
 
@@ -37,6 +39,8 @@ class BDS_Jlink(HardWareBase):
 
     def hw_open(self, speed=4000, chip='nRF52840_xxAA', reset_flag=True, start_address=None, range_size=0, sn_no=None):
         self.last_error = ''
+        phase = '打开 USB 探针'
+        success = False
         try:
             if self.jlink is None:
                 try:
@@ -64,12 +68,21 @@ class BDS_Jlink(HardWareBase):
             else:
                 self.jlink.open(serial_no=sn_no)
 
-            self.jlink.set_tif(pylink.enums.JLinkInterfaces.SWD)
+            phase = '配置 SWD 接口'
+            if not self.jlink.set_tif(pylink.enums.JLinkInterfaces.SWD):
+                raise pylink.errors.JLinkException('探针未接受 SWD 接口配置')
+            phase = f'连接目标芯片（{self.chip}，SWD {self.speed} kHz）'
+            # Set the speed before PyLink selects the device, which can trigger
+            # an automatic connection. Also pass it to avoid PyLink's auto default.
             self.jlink.set_speed(self.speed)
-            self.jlink.connect(self.chip)
+            self.jlink.connect(self.chip, speed=self.speed)
+            if not self.jlink.connected():
+                raise pylink.errors.JLinkException('探针连接已断开')
             if reset_flag:
+                phase = '复位目标芯片'
                 self.jlink.reset(ms=10, halt=False)
 
+            phase = '查找 RTT 控制块'
             offset = self.find_rtt_address(start_address, range_size)
             if offset >= 0:
                 start_address += offset
@@ -77,28 +90,40 @@ class BDS_Jlink(HardWareBase):
             if start_address is not None:
                 print('找到_SEG RTT. 起始地址:%x, 地址偏移量:%d' % (start_address, offset))
 
-            if self.jlink.connected():
-                self.jlink.swo_flush()
-                self.jlink.rtt_start(start_address)
-                self.rtt_is_start = True
-                print('jlink connect success...')
-                # 保存成功连接的序列号
-                self.last_successful_sn = self.jlink.serial_number
-                return True  # 返回连接成功的标志
+            phase = '读取探针序列号'
+            probe_sn = self.jlink.serial_number
+            phase = '清理 SWO 缓冲'
+            self.jlink.swo_flush()
+            phase = '启动 RTT'
+            self.jlink.rtt_start(start_address)
+            self.rtt_is_start = True
+            self.last_successful_sn = probe_sn
+            success = True
+            print('jlink connect success...')
+            return True
         except pylink.errors.JLinkException as e:
-            self.last_error = f'J-Link 连接失败：{e}'
-            self.err_cb('J_Link:%s\n' % e)
-            print(e)
-        return False  # 返回连接失败的标志
+            code = f'（错误码 {e.code}）' if e.code is not None else ''
+            self.last_error = f'J-Link {phase}失败：{e}{code}'
+            self.err_cb(self.last_error)
+            return False
+        finally:
+            if not success and self.jlink is not None:
+                try:
+                    self.hw_close()
+                except Exception:
+                    logging.exception('Failed to close J-Link after a connection error')
 
     def hw_close(self):
+        was_started = self.rtt_is_start
+        self.rtt_is_start = False
         if self.jlink is not None and self.jlink.opened():
             try:
-                self.rtt_is_start = False
-                self.jlink.rtt_stop()
-            except:
-                pass
-            self.jlink.close()
+                if was_started:
+                    self.jlink.rtt_stop()
+            except Exception:
+                logging.exception('Failed to stop RTT before closing J-Link')
+            finally:
+                self.jlink.close()
 
     def get_hw_serial_number(self):
         if self.jlink is not None and self.jlink.opened():

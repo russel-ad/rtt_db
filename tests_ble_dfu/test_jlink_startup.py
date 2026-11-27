@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 
 from test_panel import APP, FakeWorker
 from PyQt5.QtCore import Qt
+from pylink.errors import JLinkException
 from bds.bds_jlink import BDS_Jlink
 from ble_dfu_panel import BleDfuWidget
 from config_manager import DEFAULT_CONFIG
@@ -53,6 +54,68 @@ class JlinkOptionalTests(unittest.TestCase):
             native.close.assert_called_once()
             self.assertTrue(hardware.hw_open(reset_flag=False))
             self.assertEqual(loader.call_count, 2)
+
+    def test_target_failure_reports_stage_and_releases_probe_for_retry(self):
+        native = Mock(opened=Mock(return_value=True), serial_number=123)
+        failure = JLinkException(JLinkException.UNSPECIFIED_ERROR)
+        native.connect.side_effect = [failure, None]
+        with patch('bds.bds_jlink.pylink.JLink', return_value=native):
+            hardware = BDS_Jlink(Mock(), Mock())
+            settings = dict(chip='Cortex-M4', speed=100, sn_no='123', reset_flag=False)
+            self.assertFalse(hardware.hw_open(**settings))
+            self.assertIn('连接目标芯片（Cortex-M4，SWD 100 kHz）失败', hardware.last_error)
+            self.assertIn('错误码 -1', hardware.last_error)
+            native.open.assert_called_once_with(serial_no='123')
+            native.close.assert_called_once()
+            native.rtt_stop.assert_not_called()
+            native.rtt_start.assert_not_called()
+            self.assertTrue(hardware.hw_open(**settings))
+            native.connect.assert_called_with('Cortex-M4', speed=100)
+            native.reset.assert_not_called()
+
+    def test_rtt_start_failure_is_distinct_from_target_connect_failure(self):
+        native = Mock(opened=Mock(return_value=True), serial_number=123)
+        native.rtt_start.side_effect = JLinkException(JLinkException.UNSPECIFIED_ERROR)
+        with patch('bds.bds_jlink.pylink.JLink', return_value=native):
+            hardware = BDS_Jlink(Mock(), Mock())
+            self.assertFalse(hardware.hw_open(reset_flag=False))
+            self.assertIn('启动 RTT失败', hardware.last_error)
+            native.close.assert_called_once()
+            self.assertFalse(hardware.rtt_is_start)
+
+    def test_dialog_keeps_selected_probe_and_connect_uses_configuration(self):
+        import rtt_t2
+
+        config = copy.deepcopy(DEFAULT_CONFIG)
+        config['jk_sn'] = '123'
+        native = Mock(opened=Mock(return_value=False), serial_number=123)
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {'LOCALAPPDATA': folder}), \
+                patch.object(rtt_t2.MainWindow, 'start_hw_thread'), \
+                patch.object(rtt_t2.bds_ser, 'serial_find', return_value=([], [])), \
+                patch.object(rtt_t2.wv, 'wave_cmd'), \
+                patch('bds.bds_jlink.pylink.JLink', return_value=native):
+            window = rtt_t2.MainWindow(config)
+            try:
+                dialog = rtt_t2.ConfigDialog(config, window)
+                self.assertEqual(dialog.jk_sn_input.text(), '123')
+                dialog.chip_combo.setCurrentText('Cortex-M4')
+                dialog.jk_speed.setText('100')
+                dialog.jk_reset.setChecked(False)
+                dialog.on_save()
+                self.assertEqual(dialog.result(), rtt_t2.QDialog.Accepted)
+                window.on_connect()
+                native.open.assert_called_once_with(serial_no='123')
+                native.connect.assert_called_once_with('Cortex-M4', speed=100)
+                native.reset.assert_not_called()
+                dialog.jk_sn_input.clear()
+                dialog.on_save()
+                self.assertEqual(config['jk_sn'], '')
+            finally:
+                window.ble_dfu_page.closed.disconnect(window.close)
+                window.ble_dfu_page._finish_shutdown()
+                window.factory_pair_page.worker.stop()
+                window.deleteLater()
+                APP.processEvents()
 
     def test_real_main_initializes_default_jlink_mode_without_loading_dll(self):
         import rtt_t2

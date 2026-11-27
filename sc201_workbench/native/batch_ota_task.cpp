@@ -93,6 +93,7 @@ void RttDeviceOtaTask::setDetailedLogging(bool enabled)
 {
     m_image.compactLog = !enabled;
     m_session->setProperty("rttCompactOtaLog", !enabled);
+    m_session->setRawFrameLogging(enabled);
 }
 
 void RttDeviceOtaTask::preferThroughput(bool enabled)

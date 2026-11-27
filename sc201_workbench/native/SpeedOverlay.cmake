@@ -26,8 +26,8 @@ set(session "${RTT_WORKBENCH_OVERLAY}/MlinkSession.cpp")
 rtt_speed_replace("${session}" "#include \"BleLink.h\"" "#include \"BleLink.h\"\n#include \"ota_tuning.h\"\n#include \"ota_drive.h\"\n#include <QVariant>")
 rtt_speed_replace("${session}" "m_poll.setInterval(kPollMs);" "m_poll.setInterval(kPollMs);\n\tm_poll.setTimerType(Qt::PreciseTimer);")
 rtt_speed_replace("${session}" "void MlinkSession::postLog(const QString &line)\n{" "void MlinkSession::postLog(const QString &line)\n{\n\tif (!rttKeepOtaLog(line, property(\"rttCompactOtaLog\").toBool(), otaBusy())) return;")
-rtt_speed_replace("${session}" "if (n > 0 && buf) {" "if (n > 0 && buf && !(self->otaBusy() && self->property(\"rttCompactOtaLog\").toBool())) {")
-rtt_speed_replace("${session}" "if (describeFrame(raw, static_cast<uint16_t>(chunk.size()), t, &desc, &quiet)) {" "if (otaBusy() && property(\"rttCompactOtaLog\").toBool()) {\n\t\t// Byte delivery and protocol polling below are unchanged.\n\t} else if (describeFrame(raw, static_cast<uint16_t>(chunk.size()), t, &desc, &quiet)) {")
+# The TLV upstream guards raw TX/RX decoding with setRawFrameLogging().
+# Batch tasks set that flag directly; keep its original callback lifetime guards.
 
 # The owner still performs the complete guarded poll sequence. Repeat only
 # after an actual transfer-state change, never recursively from a callback,
@@ -55,17 +55,15 @@ rtt_speed_replace("${session}" [=[	pollOta();
 }
 
 /* The library owns the transfer's reports]=])
-rtt_speed_replace("${session}" [=[	if (self->m_otaJobActive)
-		mlink_ota_job_on_done(&self->m_tx, idx, tag, result, reason);]=] [=[	if (self->m_otaJobActive) {
-        mlink_ota_job_on_done(&self->m_tx, idx, tag, result, reason);
+rtt_speed_replace("${session}" [=[		mlink_ota_job_on_done(&self->m_tx, idx, tag, result, reason);]=] [=[		mlink_ota_job_on_done(&self->m_tx, idx, tag, result, reason);
         if (auto *trace = RttOtaTrace::existing(self)) trace->ack(tag, result, trace->nowUs());
-    }]=])
+]=])
 rtt_speed_replace("${session}" [=[	if (self->m_otaJobActive && mlink_ota_job_on_tlv(&self->m_tx, idx, h, body, len) != 0)
 		return;]=] [=[	if (self->m_otaJobActive && mlink_ota_job_on_tlv(&self->m_tx, idx, h, body, len) != 0) {
         // Measure only a report already accepted by the original job. Decode
         // through the frozen public API, with no raw/encrypted byte offsets.
         mlink_cmd_xfer_wrote_t wrote{};
-        if (mlink_xfer_wrote_decode(body, len, &wrote) == MLINK_OK && wrote.mt == MLINK_MT_RPT)
+        if (mlink_xfer_block_written_decode(body, len, &wrote) == MLINK_OK)
             if (auto *trace = RttOtaTrace::existing(self))
                 trace->stored(wrote.transfer_id, wrote.idx, trace->nowUs());
         return;
@@ -74,7 +72,7 @@ rtt_speed_replace("${session}" [=[	if (self->m_otaJobActive && mlink_ota_job_on_
 set(ota "${RTT_WORKBENCH_OVERLAY}/MlinkSessionOta.cpp")
 rtt_speed_replace("${ota}" "#include \"SessionTransport.h\"" "#include \"SessionTransport.h\"\n#include \"ota_att_plan.h\"\n#include \"ota_drive.h\"\n#include <QVariant>")
 rtt_speed_replace("${ota}" "const uint16_t chunk = uint16_t(mlink_xfer_block_max(outMax) & ~uint16_t(3));" "const uint16_t chunk = rttOtaChunk(outMax, m_transport ? m_transport->attPayload() : 0, property(\"rttFitOtaToAtt\").toBool());")
-rtt_speed_replace("${ota}" "m_scratch.resize(int(chunk));" [=[m_scratch.resize(int(chunk));
+rtt_speed_replace("${ota}" "m_scratch.resize(int(outMax));" [=[m_scratch.resize(int(outMax));
     const auto att = m_transport ? m_transport->attPayload() : 0;
     emit logLine(QStringLiteral("[ota-att] payload=%1 original_chunk=%2 selected_chunk=%3 max_wire=%4 data_write_parts=%5 optimized=%6")
         .arg(att).arg(rttOtaChunk(outMax, att, false)).arg(chunk).arg(rttOtaFrameBound(chunk))
@@ -84,7 +82,7 @@ rtt_speed_replace("${ota}" [=[	emit logLine(QStringLiteral("[ota] start size=%1 
     emit logLine(QStringLiteral("[ota-drive] enabled=%1 poll_budget=%2")
         .arg(property("rttOtaEventDrive").toBool()).arg(RttOtaPollBudget));
 	emit logLine(QStringLiteral("[ota] start size=%1 crc=%2 chunk=%3 blocks=%4 id=%5")]=])
-rtt_speed_replace("${ota}" [=[			self->m_blockLog = idx;]=] [=[			self->m_blockLog = idx;
+rtt_speed_replace("${ota}" [=[		const uint16_t idx = self->m_tx.transfer.idx;]=] [=[		const uint16_t idx = self->m_tx.transfer.idx;
             if (auto *trace = RttOtaTrace::existing(self)) {
                 const auto timing = trace->progress(idx, self->m_tx.transfer.n_blocks);
                 if (!timing.isEmpty()) self->postLog(timing);

@@ -5,7 +5,7 @@ RttOtaPoint rttOtaPoint(const mlink_ota_job_t *job)
 {
     if (!job) return {};
     return {mlink_ota_job_state(job), mlink_xfer_tx_state(&job->transfer),
-        job->transfer.transfer_id, job->transfer.pending_tag, job->transfer.idx};
+        job->transfer.transfer_id, job->transfer.sw.tag, job->transfer.idx};
 }
 
 bool rttOtaContinue(const RttOtaPoint &before, const RttOtaPoint &after, unsigned passes)

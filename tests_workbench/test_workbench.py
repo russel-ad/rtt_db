@@ -141,6 +141,20 @@ class NativeWidgetTests(unittest.TestCase):
         finally:
             lock.unlock()
 
+    def test_screen_central_controls_require_an_authenticated_capable_device(self):
+        self.widget = self.api.create(self.parent, Path(self.folder.name) / 'workbench')
+        controls = self.widget.findChild(QWidget, 'centralControls')
+        self.assertIsNotNone(controls)
+        self.assertTrue(controls.isHidden())
+        for name in ('centralRelease', 'centralResume'):
+            button = controls.findChild(QPushButton, name)
+            self.assertIsNotNone(button)
+            self.assertFalse(button.isEnabled())
+            button.click()
+        state = self.api.state(self.widget)
+        self.assertFalse(state['connected'] or state['busy'] or state['scanning'])
+        self.assertFalse(state['batch_ota']['active'])
+
     def test_default_gateway_uses_current_server_without_automatic_login(self):
         self.widget = self.api.create(self.parent, Path(self.folder.name) / 'workbench')
         self.assertEqual(self.widget.findChild(QLineEdit, 'serverSystemUrl').text(),

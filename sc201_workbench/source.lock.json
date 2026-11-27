@@ -1,6 +1,8 @@
 {
   "repository": "git@gitlab.dft.pri:sc201/sc201_host.git",
-  "reference": "origin/master",
-  "commit": "9dbd83bbdc712f2df773b7a74376eb41d4f49855",
-  "libmlink_commit": "a51edfb2093d15e286d6d1efa6db3b93c820c697"
+  "reference": "origin/refactor/mlink-simplify-host-20261111",
+  "commit": "4c71fe1f4ac3df685c365b948bc71492db2ada5a",
+  "libmlink_commit": "a9110d2afaf395dd21d5362f960d5946ae68a1a9",
+  "business_protocol": "SC201 product TLV v1",
+  "legacy_json_device_compatible": false
 }

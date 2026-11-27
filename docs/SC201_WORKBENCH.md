@@ -1,6 +1,43 @@
 # RTT 中的 SC201 设备工作台
 
-当前源码版本为 v2.10.8，包含下述工作台功能及[上位机自动更新](AUTO_UPDATE.md)。已用修复后的内置 MediaTek 适配器完成四台一轮验版，从批次活动日志起点到全部验版为 213.236 秒，依赖配套 V001_006 固件和本机环境；验证边界见[修改记录](../CHANGELOG.md)。下面 v2.9.x 的“尚待实测”描述保留其当时的历史范围。
+正式版 v2.10.12 包含下文 11 月 24 日集成的 TLV 工作台。本机已用 SC202-S 固件 V001-007 验证生产状态、绑定、加密连接与重量上报。v2.10.10 使用旧 JSON 业务协议。
+
+本次集成的源码基线为 v2.10.9，包含下述工作台功能及[上位机自动更新](AUTO_UPDATE.md)。历史上已用修复后的内置 MediaTek 适配器完成四台一轮验版，从批次活动日志起点到全部验版为 213.236 秒，依赖当时配套 V001_006 固件和本机环境；验证边界见[修改记录](../CHANGELOG.md)。该成绩不能代替下述 TLV 分支的实机验收。下面 v2.9.x 的“尚待实测”描述保留其当时的历史范围。
+
+## 2026-11-24：工作区合入 mlink 简化分支（未发布）
+
+工作台来源更新至 `sc201_host` 远端 `origin/refactor/mlink-simplify-host-20261111`，已在恢复 GitLab 访问后重新拉取，最新提交为 `4c71fe1f4ac3df685c365b948bc71492db2ada5a`（2026-11-13）。RTT 通过锁定来源重新编译组件，原 `E:/onm/sc201_host` 工作区的未提交修改保留。
+
+比较基准为此前集成的 `9dbd83bbdc712f2df773b7a74376eb41d4f49855`，不是来源目录尚未提交的文件。该分支相对基准有 **6 个新提交、49 个文件变化，新增 2,882 行、删除 1,306 行**。其中 `libmlink` 在父仓库仅计作一个子模块指针；其内部另外涉及 244 个文件，新增 11,816 行、删除 6,011 行，不能把父仓库数字当作整个依赖的代码规模。
+
+| 范围 | 此前集成版本 | 本次集成 |
+| --- | --- | --- |
+| 设备业务消息 | JSON wire，`MlinkSessionJson.cpp` | 共享产品 TLV v1，`MlinkSessionBusiness.cpp`；JSON wire 关闭 |
+| 公共库 | `a51edfb2093d15e286d6d1efa6db3b93c820c697` | `a9110d2afaf395dd21d5362f960d5946ae68a1a9`，445 份输入冻结校验 |
+| 产品编解码 | 旧业务消息实现 | `components/sc201_protocol`，另对 4 份输入精确校验 |
+| 屏与秤连接控制 | 无专用入口 | 日常操作增加“释放秤蓝牙／恢复秤连接” |
+| 同一 BLE 内重认证 | 旧会话实现 | 使用库的重认证流程，等待 SDK 写入完成并隔离旧接收回调 |
+| OTA 重启后重连 | 旧物理重连时机 | 保留验版期限，等待本次重启后的新鲜可连接广播再建 GATT |
+| RTT 批量升级 | 1～4 台独立会话、RSSI 过滤、确认后立即推进、计时及取消 | 保留，并适配新传输接口及完整正文 scratch 容量 |
+| 服务器与资料 | Qt JSON HTTP、缓存、账号、密钥和权限 1～4 | 沿用原接口和存储布局，保留 `requestId` 校验及默认网关 |
+
+**设备兼容要求：此工作台使用新 TLV 业务协议，不兼容仅支持旧 JSON 业务协议的固件。** 设备必须使用配套 TLV 主／从机固件，不能仅凭显示版本相同就认定兼容。服务器 HTTP 仍使用 JSON，并不表示设备业务协议仍兼容旧版。独立“蓝牙 DFU 升级”继续使用原有 OnMicro ZIP 流程。
+
+“释放秤蓝牙／恢复秤连接”只对已认证且声明支持 `device.central` 的 SC200-D 屏设备显示；权限须为 App 或生产权限。操作会检查相应业务应答及最终状态，链路 ACK 或本地发送完成不能直接判为成功。
+
+RTT 侧只修改构建适配与诊断，公共库及产品编解码保持来源原样。发送 scratch 缓冲区按完整明文正文容量分配；块级 ACK／落盘计时改为使用新版库的等待标签和 `mlink_xfer_block_written_decode()`；日志沿用上游的原始帧开关。现有 RTT、串口、RTC 和 UART 验证页继续由本仓库实现。
+
+构建与测试记录位于 `build/sc201_host_simplify_20261124/`。本轮 Windows Release DLL 重建通过，69 份来源文件及本仓适配代码摘要与 `build.json` 一致，新 DLL SHA-256 为 `d9684bd7ec7cae71cca21f4d7221f75fb024e68b87718a911ebc1ed266af14cd`。
+
+| 本轮验证 | 结果 |
+| --- | --- |
+| RTT 工作台 Python 集成 | 22 项通过，含新屏端控制入口的未认证保护 |
+| 原生并发 OTA | 32 项通过，含双台／四台真实 TLS 模拟会话、取消隔离及重启验版 |
+| 上游测试入口 | 18 项全部通过：分两组执行 17 个 CTest，并直接执行同参数的完整 `test_bench_ui` |
+| 服务器专项 | 响应追踪回归、`test_bench_ui --server-ui-only` 通过 |
+| 其他 RTT 功能 | 自动更新 62 项、RTC 22 项、UART 10 项通过 |
+
+上游回归覆盖产品 TLV 编解码、屏端控制及界面、重认证与权限、HTTP 替身、CLI、BLE 重试、OTA 目标与验版归属，完整 UI 的日志复制检查本轮也通过。所有测试使用临时资料、模拟字节口／Flash、假 GATT 或本地 HTTP 替身，未读取原资料台账，也未登录真实服务器或操作实机。尚未发布 EXE，不能把历史 240 秒成绩视为新协议验收。
 
 ## 2026-11-06：工作区合入上游 master
 
@@ -48,7 +85,7 @@ v2.9.0 在“固件升级”增加多设备并发加密升级，默认同时 2 �
 | 固件升级 | 原 App 加密 OTA、取消、重启重连及版本核验 |
 | 工厂生产 | 初始化状态、生产与事务恢复、返工更换 SN 和根密钥 |
 | 连接测试 | 云端、缓存、互联权限专项连接 |
-| 资料与调试 | 原资料查看/导入/导出及手动 JSON |
+| 资料与调试 | 原资料查看、导入、导出及通信日志 |
 
 蓝牙列表、账号与手机上下文、服务器设置、操作记录和日志使用原工作台实现。来源工程的权限校验、TLS、认领确认和升级核验保持有效。
 
@@ -69,7 +106,7 @@ v2.9.0 在“固件升级”增加多设备并发加密升级，默认同时 2 �
 ```powershell
 git -C E:/onm/sc201_host fetch origin
 # 来源目录有本地修改时，创建独立工作树，不覆盖原工作区。
-git -C E:/onm/sc201_host worktree add --detach G:/rtt_db/build/sc201_host_source 9dbd83bbdc712f2df773b7a74376eb41d4f49855
+git -C E:/onm/sc201_host worktree add --detach G:/rtt_db/build/sc201_host_source 4c71fe1f4ac3df685c365b948bc71492db2ada5a
 git -C G:/rtt_db/build/sc201_host_source submodule update --init
 python -m sc201_workbench.build_native --source G:/rtt_db/build/sc201_host_source --dependency-source E:/onm/sc201_host --data-directory E:/onm/sc201_host/private/workbench --tests --upstream-tests
 powershell -NoProfile -ExecutionPolicy Bypass -File ./build_ble_dfu.ps1 -Workbench -Suffix integrated
@@ -83,7 +120,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ./build_ble_dfu.ps1 -Workben
 
 测试使用独立临时资料目录，不自动登录、扫描、连接、生产或升级设备。实机和服务器验收需要实际账号、设备及操作。
 
-## 本轮验证范围
+## 2026-11-02：初次集成验证范围
 
 原 RTT/BLE Python 回归 80 项通过、16 项缺少旧固件夹具跳过，出厂配对 22 项通过，新工作台集成 8 项通过。源码及打包后的真实 Windows 界面均载入四个顶层标签页和原工作台五个功能页；清除开发机 Python/Qt PATH 后，EXE 仍能加载组件及随包 OpenSSL 1.1.1w。测试均使用独立资料目录。
 

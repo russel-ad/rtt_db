@@ -67,6 +67,7 @@ struct IdentityPort : SessionTransport {
     bool isOpening() const override { return false; }
     uint16_t attPayload() const override { return 20; }
     uint16_t pendingBytes() const override { return 0; }
+    bool quiesce() override { return ready; }
     int write(const uint8_t *, uint16_t size) override { ++writes; return size; }
 };
 class ReportedAttScale : public SimulatedScale {
@@ -120,6 +121,7 @@ public:
     bool isOpening() const override { return board.isOpening(); }
     uint16_t attPayload() const override { return board.attPayload(); }
     uint16_t pendingBytes() const override { return qMax(m_pending, board.pendingBytes()); }
+    bool quiesce() override { return !m_pending && board.quiesce(); }
     int write(const uint8_t *data, uint16_t size) override {
         if (m_pending) return 0;
         const int accepted = board.write(data, size);

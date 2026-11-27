@@ -28,7 +28,7 @@ def find_qt(source: Path) -> Path:
 
 def inputs(source: Path) -> dict[str, str]:
     paths = [source / 'CMakeLists.txt']
-    for folder in ('src', 'config', 'cmake'):
+    for folder in ('src', 'config', 'cmake', 'components/sc201_protocol'):
         paths.extend(path for path in (source / folder).rglob('*') if path.is_file())
     return {path.relative_to(source).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in sorted(paths)}
@@ -97,7 +97,12 @@ def main():
     print('Compiling original UI, workflows and frozen protocol libraries', flush=True)
     targets = ['sc201_workbench'] + (['test_rtt_batch_ota', 'test_rtt_server_backend_trace'] if args.tests else [])
     if args.upstream_tests:
-        targets.extend(['test_bench_ui', 'test_server_backend'])
+        targets.extend(['test_bench_ui', 'test_server_backend', 'test_sc201_profile',
+                        'test_central_control', 'test_ota_verification', 'test_ble_retry',
+                        'test_ota_target_ui', 'test_app_open_retry', 'test_interconnect',
+                        'test_secure_workflow', 'test_device_identity', 'test_cli_profiles',
+                        'test_cli_offline_ota', 'test_claim_proof', 'test_serial_generation',
+                        'test_ledger_import', 'test_gatt_open_state'])
     run([cmake, '--build', str(args.build_dir), '--config', 'Release', '--target', *targets,
          '--parallel', '4'], args.build_dir / 'build.log')
     if before != inputs(source) or (source_head, library_head) != source_revisions(source):
@@ -127,6 +132,10 @@ def main():
                 'upstream_source': source_lock,
                 'dependency_source_directory': str(dependencies),
                 'qt_version': '5.15.2', 'source_inputs_sha256': before,
+                'business_protocol': {'format': 'SC201 product TLV v1', 'json_wire': False,
+                                      'frozen_product_inputs': 4, 'legacy_json_device_compatible': False,
+                                      'screen_central_release_resume': True,
+                                      'fresh_advertisement_after_ota': True},
                 'batch_ota': {'available': True, 'default_concurrency': 2, 'min_concurrency': 1, 'max_concurrency': 4,
                               'separate_sessions_and_backends': True, 'success_requires_post_reboot_version': True,
                               'throughput_preferred_default': False, 'throughput_api': 'Windows 11 BluetoothLEDevice6',

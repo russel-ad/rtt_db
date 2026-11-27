@@ -400,7 +400,7 @@ class MainWindow(QMainWindow):
 
     def init_ui(self):
         # 设置窗口属性
-        self.setWindowTitle(f'RTT调试工具 v{APP_VERSION} · SC201 四台并发固件升级')
+        self.setWindowTitle(f'RTT调试工具 v{APP_VERSION} · SC201 TLV 工作台')
         self.setGeometry(100, 100, 1200, 800)
 
         # 创建中心部件
@@ -917,6 +917,7 @@ class MainWindow(QMainWindow):
                     jk_con_reset = False  # Preserve the current RTC test boot.
                 jk_speed = int(self.js_cfg.get('jk_speed', 4000))
                 chip = self.js_cfg['jk_chip'][0]
+                probe_sn = str(self.js_cfg.get('jk_sn') or '').strip() or None
                 start_address = None
                 range_size = 0
                 rtt_cfg = self.js_cfg.get('rtt_block_address', ['', ''])
@@ -929,7 +930,8 @@ class MainWindow(QMainWindow):
                     chip=chip,
                     reset_flag=jk_con_reset,
                     start_address=start_address,
-                    range_size=range_size
+                    range_size=range_size,
+                    sn_no=probe_sn,
                 )
                 if result:
                     self.connect_btn.setText("J_Link断开")
@@ -1405,6 +1407,8 @@ class ConfigDialog(QDialog):
         chip_list = self.js_cfg.get('jk_chip', ['STM32F103C8', 'STM32F407VE', 'STM32F103ZE', 'STM32F407ZG'])
         self.chip_combo = QComboBox()
         self.chip_combo.addItems(chip_list)
+        if self.chip_combo.findText('Cortex-M4') < 0:
+            self.chip_combo.addItem('Cortex-M4')
 
         # 速度
         self.jk_speed = QLineEdit(str(self.js_cfg.get('jk_speed', 4000)))
@@ -1412,7 +1416,7 @@ class ConfigDialog(QDialog):
 
         # SN号（可选）
         self.jk_sn_label = QLabel("SN:")
-        self.jk_sn_input = QLineEdit()
+        self.jk_sn_input = QLineEdit(str(self.js_cfg.get('jk_sn') or ''))
         self.jk_sn_input.setPlaceholderText("可选，留空自动检测")
 
         # 复位选项
@@ -1642,6 +1646,11 @@ class ConfigDialog(QDialog):
 
     def on_save(self):
         try:
+            probe_sn = self.jk_sn_input.text().strip()
+            if probe_sn and (not probe_sn.isascii() or not probe_sn.isdecimal() or
+                             len(probe_sn) > 10 or not 0 < int(probe_sn) <= 0xffffffff):
+                QMessageBox.warning(self, 'J-Link 配置', '请输入探针的数字序列号，或留空自动检测。')
+                return
             # 保存接口选择
             if self.jk_radio.isChecked():
                 self.js_cfg['hw_sel'] = '1'
@@ -1657,8 +1666,7 @@ class ConfigDialog(QDialog):
             self.js_cfg['jk_speed'] = int(self.jk_speed.text())
             self.js_cfg['jk_con_reset'] = self.jk_reset.isChecked()
 
-            if self.jk_sn_input.text():
-                self.js_cfg['jk_sn'] = self.jk_sn_input.text()
+            self.js_cfg['jk_sn'] = probe_sn
 
             # RTT地址
             rtt_text = self.rtt_address.text()
