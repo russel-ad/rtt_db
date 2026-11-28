@@ -254,7 +254,9 @@ class IntegrationTests(unittest.TestCase):
                 patch("rtt_t2.BleDfuWidget", side_effect=lambda *args, **kwargs:
                       BleDfuWidget(*args, worker_factory=FakeWorker, **kwargs)):
             window = MainWindow(copy.deepcopy(DEFAULT_CONFIG))
-            self.assertEqual(window.workspace_tabs.count(), 6)
+            self.assertEqual(window.workspace_tabs.count(), 7)
+            self.assertEqual(window.workspace_tabs.tabText(6), "SC20x 单板产测")
+            self.assertIs(window.workspace_tabs.widget(6), window.station)
             self.assertEqual(window.workspace_tabs.tabText(3), "SC201 设备工作台")
             self.assertEqual(window.workspace_tabs.tabText(2), "出厂配对")
             self.assertEqual(window.workspace_tabs.tabText(1), "蓝牙 DFU 升级")

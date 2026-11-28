@@ -191,13 +191,13 @@ class PanelTests(unittest.TestCase):
             def start_hw_thread(self): pass
         w=Window(copy.deepcopy(DEFAULT_CONFIG)); self.addCleanup(w.deleteLater)
         self.addCleanup(w.ble_dfu_page.file_handler.close)
-        self.assertEqual(w.workspace_tabs.count(),6)
         self.assertEqual(w.workspace_tabs.tabText(4),'RTC 验证')
         self.assertIn('连接',w.rtc_guard())
         w.rtc_validation_page.session=object()
         self.assertIn('RTC',w.ble_upgrade_guard())
         self.assertIn('RTC',w.factory_pair_guard())
         self.assertIn('RTC',w.sc201_workbench_guard())
+        self.assertIn('RTC',w.station_guard())
         w.rtc_validation_page.session=None
 
 if __name__=='__main__': unittest.main()

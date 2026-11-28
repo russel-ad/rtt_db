@@ -33,6 +33,7 @@ def self_test():
     parser.add_argument("--height", type=int, default=1040)
     parser.add_argument("--without-jlink-dll", action="store_true")
     parser.add_argument("--uart-preview", action="store_true")
+    parser.add_argument("--station-preview", choices=("host", "scale"))
     parser.add_argument("--app-update-preview", action="store_true")
     args = parser.parse_args()
 
@@ -55,6 +56,9 @@ def self_test():
     window.workspace_tabs.setCurrentIndex(1)
     if args.uart_preview:
         window.workspace_tabs.setCurrentWidget(window.uart_validation_page)
+    if args.station_preview:
+        window.station.role.setCurrentIndex(1 if args.station_preview == "host" else 0)
+        window.workspace_tabs.setCurrentWidget(window.station)
     if args.workbench_preview or args.workbench_firmware_preview:
         from PyQt5.QtCore import QSettings
         data_dir = (args.workbench_data_dir or args.ui_self_test.parent / 'workbench_test_data').resolve()
@@ -190,6 +194,11 @@ def self_test():
         report["progress_value"] = panel.progress_bar.value()
         report["progress_footer_outside_scroll"] = not panel.body_scroll.isAncestorOf(panel.progress_footer)
         report["window_size"] = [window.width(), window.height()]
+        if args.station_preview:
+            station = window.station
+            report["production_station"] = dict(role=station.role.currentText(),
+                visible=station.isVisible(), uart_open=station.serial.isOpen(),
+                items=[station.menu.item(i).text() for i in range(station.menu.count())])
         report["device_progress_delegate"] = type(panel.result_tree.itemDelegateForColumn(2)).__name__
         if args.screenshot:
             window.grab().save(str(args.screenshot))

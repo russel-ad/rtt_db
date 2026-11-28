@@ -68,6 +68,9 @@ def busy_reason(window):
         from .sessions import other_instances
         if other_instances(Path(home), session):
             return '其他上位机窗口仍在运行，请关闭其他窗口后更新'
+    station = getattr(window, 'station', None)
+    if station and station.serial.isOpen():
+        return '单板产测正在占用工装串口'
     uart = getattr(window, 'uart_validation_page', None)
     if uart and uart.active:
         return 'UART 通信测试正在使用探针或保存报告'

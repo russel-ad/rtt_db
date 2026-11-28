@@ -30,6 +30,7 @@ from sc201_workbench.panel import Sc201WorkbenchWidget
 from app_update import APP_VERSION, RESTART_FOR_UPDATE
 from rtc_validation.panel import RtcValidationWidget
 from uart_validation.panel import UartValidationWidget
+from production_station import StationWidget
 
 # 全局变量
 global main_window
@@ -552,6 +553,9 @@ class MainWindow(QMainWindow):
             self, settings=self.js_cfg, directory=lambda: os.path.join(config_manager.get_log_dir(), 'uart_validation'),
             guard=self.uart_validation_guard)
         self.workspace_tabs.addTab(self.uart_validation_page, 'UART 通信测试')
+        self.station = StationWidget(self, config_manager.get_log_dir, self.open_station_workbench, self.station_guard)
+        self.workspace_tabs.addTab(self.station, 'SC20x 单板产测')
+        self.station.active_changed.connect(self._refresh_workspace_access)
         self.setCentralWidget(self.workspace_tabs)
         self.ble_dfu_page.closed.connect(self.close)
         self.ble_dfu_page.upgrade_active.connect(self.on_ble_upgrade_active)
@@ -569,6 +573,8 @@ class MainWindow(QMainWindow):
         self.start_hw_thread()
 
     def rtc_guard(self):
+        if self.station_active():
+            return "单板产测正在占用工装，请先断开串口"
         if self.uart_validation_active():
             return 'UART 通信测试正在使用探针'
         if self.js_cfg.get('char_format') == 'hex':
@@ -601,6 +607,8 @@ class MainWindow(QMainWindow):
             raise RuntimeError('RTC 命令发送不完整，请暂停并重新连接后继续')
 
     def ble_upgrade_guard(self):
+        if self.station_active():
+            return "单板产测正在占用工装，请先断开串口"
         if self.uart_validation_active():
             return '请先结束 UART 通信测试再升级'
         rtc = getattr(self, 'rtc_validation_page', None)
@@ -618,6 +626,8 @@ class MainWindow(QMainWindow):
         return None
 
     def factory_pair_guard(self):
+        if self.station_active():
+            return "单板产测正在占用工装，请先断开串口"
         if self.uart_validation_active():
             return '请先结束 UART 通信测试再操作出厂配对'
         rtc = getattr(self, 'rtc_validation_page', None)
@@ -634,6 +644,8 @@ class MainWindow(QMainWindow):
         return None
 
     def sc201_workbench_guard(self):
+        if self.station_active():
+            return "单板产测正在占用工装，请先断开串口"
         if self.uart_validation_active():
             return '请先结束 UART 通信测试再使用 SC201 工作台'
         rtc = getattr(self, 'rtc_validation_page', None)
@@ -648,11 +660,40 @@ class MainWindow(QMainWindow):
                 return '资源传输正在进行，请完成后再使用 SC201 工作台'
         return None
 
+    def station_active(self):
+        page = getattr(self, 'station', None)
+        return bool(page and page.serial.isOpen())
+
+    def station_guard(self):
+        if self.uart_validation_active():
+            return '请先结束 UART 通信测试'
+        return self._station_resource_guard()
+
+    def open_station_workbench(self, section):
+        from PyQt5.QtWidgets import QListWidget
+        page = self.sc201_workbench_page
+        self.workspace_tabs.setCurrentWidget(page)
+        if not page.ensure_loaded():
+            return
+        nav = page.workbench.findChild(QListWidget, 'workspaceNavigation')
+        if nav:
+            for index in range(nav.count()):
+                if nav.item(index).text() == section:
+                    nav.setCurrentRow(index)
+                    return
+        page.notice.setText('请在工作台选择「' + section + '」')
+        page.notice.show()
+
     def uart_validation_active(self):
         page = getattr(self, 'uart_validation_page', None)
         return bool(page and page.active)
 
     def uart_validation_guard(self):
+        if self.station_active():
+            return '单板产测正在占用工装，请先断开串口'
+        return self._station_resource_guard()
+
+    def _station_resource_guard(self):
         if self.hw_obj and self.hw_obj.hw_is_open():
             return '请先断开「RTT / 串口调试」页中的连接'
         rtc = self.rtc_validation_page
@@ -668,6 +709,9 @@ class MainWindow(QMainWindow):
         return None
 
     def _on_workspace_changed(self, *_):
+        if self.station_active() and self.workspace_tabs.currentWidget() is not self.station:
+            self.station.record('离开单板工位，释放本板 UART 和临时测试输出')
+            self.station.disconnect_port()
         if self.workspace_tabs.currentWidget() is self.sc201_workbench_page:
             self.sc201_workbench_page.ensure_loaded()
         self._refresh_workspace_access()
@@ -680,7 +724,7 @@ class MainWindow(QMainWindow):
         if page.workbench is not None:
             page.workbench.setEnabled(not bool(reason))
         reserved = self.workspace_tabs.currentWidget() is page and not reason
-        locked = page.active or reserved or self.uart_validation_active()
+        locked = page.active or reserved or self.uart_validation_active() or self.station_active()
         self.ble_dfu_page.setEnabled(not locked and not (self.factory_pair_page.connected or self.factory_pair_page.busy))
         self.factory_pair_page.setEnabled(not locked and not self.ble_dfu_page.upgrading)
         if locked != getattr(self, '_workbench_controls_locked', False):
@@ -1353,6 +1397,7 @@ class MainWindow(QMainWindow):
         bootstrap_restart = False
         if updater:
             bootstrap_restart = updater.stop()
+        self.station.disconnect_port()
         event.accept()
         if getattr(self, '_update_restart', False):
             QApplication.instance().setQuitOnLastWindowClosed(False)

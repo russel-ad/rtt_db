@@ -69,6 +69,9 @@ def main():
     args.proof.mkdir(parents=True, exist_ok=False)
     base = args.proof / '旧版 基础包'
     shutil.copytree(args.old_base, base)
+    launcher_hash = digest(base/'RTTTool.exe')
+    launcher_metadata = read_json(base/'launcher-version.json', {}) or read_json(base/'bootstrap-files.json', {})
+    already_multiwindow = launcher_metadata.get('revision') == 2
     profile = args.proof / 'isolated-profile'
     home = profile / 'RTTTool/updates'
     settings = read_json(base/'updater.json')
@@ -100,14 +103,19 @@ def main():
         until(lambda: read_json(home/'current.json',{}).get('trial') is False)
         assert read_json(home/'current.json')['current'] == APP_VERSION
         report['old_launcher_installed_signed_application'] = True
-        print('PASS: legacy launcher installed signed app and startup health passed',flush=True)
+        print('PASS: previous launcher installed signed app and startup health passed',flush=True)
         close(legacy)
-        until(lambda: read_json(home/'bootstrap-result.json',{}).get('installed') is True)
-        assert read_json(base/'launcher-version.json')['revision'] == 2
+        if already_multiwindow:
+            assert digest(base/'RTTTool.exe') == launcher_hash
+            report['existing_revision_2_launcher_preserved'] = True
+        else:
+            until(lambda: read_json(home/'bootstrap-result.json',{}).get('installed') is True)
+            assert read_json(base/'launcher-version.json')['revision'] == 2
+            report['bootstrap_migrated_with_configuration_preserved'] = True
         assert digest(base/'updater.json') == settings_hash
         assert read_json(data/'config.json')['filter'] == 'multiwindow-fixture-keep'
-        report['bootstrap_migrated_with_configuration_preserved'] = True
-        print('PASS: old top-level launcher migrated, settings and config preserved',flush=True)
+        report['configuration_preserved'] = True
+        print('PASS: launcher revision checked, settings and config preserved',flush=True)
         first = subprocess.Popen([str(base/'RTTTool.exe')],env=env,cwd=base)
         processes.append(first)
         first_windows = until(lambda: windows(first))
